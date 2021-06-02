@@ -12,7 +12,7 @@ int main(int argc, char *argv[]) {
     mem_load_rom("roms/pokemon blue.gb");
 
     // Main tick loop
-    while (tick() != TICK_FAIL) {
+    while (cpu_tick() != TICK_FAIL) {
         gpu_update();
     }
 

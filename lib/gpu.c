@@ -22,23 +22,3 @@ void gpu_update() {
         gpu_counter = 0;
     }
 }
-
-// Function that does the drawing
-// glut calls this function whenever it needs to redraw
-extern void display() {
-    
-    // clear the color buffer before each drawing
-    glClear(GL_COLOR_BUFFER_BIT);
-    glMatrixMode( GL_PROJECTION );
-    glLoadIdentity();
-    gluOrtho2D( 0.0, 500.0, 500.0,0.0 );
-
-    glBegin(GL_POINTS);
-    glColor3f(1,1,1);
-    glVertex2i(100,100);
-    glEnd();
-
-    // swap the buffers and hence show the buffers
-    // content to the screen
-    glutSwapBuffers();
-}

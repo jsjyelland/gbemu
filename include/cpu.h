@@ -19,7 +19,7 @@ void cpu_init();
 /**
  * Read, decode, execute loop
  */
-int tick();
+int cpu_tick();
 
 /**
  * Return the program counter

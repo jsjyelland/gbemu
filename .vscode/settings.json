@@ -9,6 +9,7 @@
         "mem.h": "c",
         "memory.h": "c",
         "stdint.h": "c",
-        "cpu.h": "c"
+        "cpu.h": "c",
+        "stdlib.h": "c"
     }
 }

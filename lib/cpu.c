@@ -1867,7 +1867,7 @@ void cpu_init() {
     printf("CPU init\r\n");
 }
 
-int tick() {
+int cpu_tick() {
     // Opcode
     uint8_t opcode = mem_read_byte(pc++);
 
