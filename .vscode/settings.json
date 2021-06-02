@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "stdio.h": "c",
+        "gpu.h": "c",
+        "glew.h": "c",
+        "string.h": "c",
+        "string": "c",
+        "cstdint": "cpp",
+        "mem.h": "c",
+        "memory.h": "c",
+        "stdint.h": "c",
+        "cpu.h": "c"
+    }
+}
