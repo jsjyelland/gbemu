@@ -33,55 +33,55 @@ static const uint8_t bios[256] = {
 /**
  * Read from the ROM bank 0
  */
-static uint8_t mem_read_rom(uint16_t address) {
+static uint8_t mem_read_rom(gb_t *gb, uint16_t address) {
     // If in the bios, map addresses 0x00 to 0xFF to the bios instructions
-    if (address < 0x100 && get_gb_instance()->in_bios) {
+    if (address < 0x100 && gb->in_bios) {
         return bios[address];
     } else {
-        return get_gb_instance()->rom[address];
+        return gb->rom[address];
     }
 }
 
 /**
  * Read from the switchable ROM bank on the cartridge
  */
-static uint8_t mem_read_mbc_rom(uint16_t address) {
-    return get_gb_instance()->rom[address];
+static uint8_t mem_read_mbc_rom(gb_t *gb, uint16_t address) {
+    return gb->rom[address];
 }
 
 /**
  * Read from the vram
  */
-static uint8_t mem_read_vram(uint16_t address) {
-    return get_gb_instance()->vram[address & 0x1FFF];
+static uint8_t mem_read_vram(gb_t *gb, uint16_t address) {
+    return gb->vram[address & 0x1FFF];
 }
 
 /**
  * Read from the switchable RAM bank on the cartridge
  */
-static uint8_t mem_read_mbc_ram(uint16_t address) {
-    return get_gb_instance()->mbc_ram[address & 0x1FFF];
+static uint8_t mem_read_mbc_ram(gb_t *gb, uint16_t address) {
+    return gb->mbc_ram[address & 0x1FFF];
 }
 
 /**
  * Read from the internal RAM
  */
-static uint8_t mem_read_ram(uint16_t address) {
-    return get_gb_instance()->ram[address & 0x1FFF];
+static uint8_t mem_read_ram(gb_t *gb, uint16_t address) {
+    return gb->ram[address & 0x1FFF];
 }
 
 /**
  * Read from the high RAM sections
  */
-static uint8_t mem_read_high_ram(uint16_t address) {
+static uint8_t mem_read_hram(gb_t *gb, uint16_t address) {
     if (address < 0xFE00) {
         // Shadow copy of ram
-        return mem_read_ram(address);
+        return mem_read_ram(gb, address);
     }
 
     if (address < 0xFEA0) {
         // OAM
-        return get_gb_instance()->oam[address & 0xFF];
+        return gb->oam[address & 0xFF];
     }
 
     if (address < 0xFF00) {
@@ -91,14 +91,14 @@ static uint8_t mem_read_high_ram(uint16_t address) {
 
     if (address < 0xFF80) {
         // I/O registers
-        return get_gb_instance()->io_registers[address & 0xFF];
+        return gb->io_registers[address & 0xFF];
     }
 
     if (address == 0xFFFF) {
         // Interrupt enable register
     }
 
-    return get_gb_instance()->high_speed_ram[address - 0xFF80];
+    return gb->hram[address - 0xFF80];
 }
 
 static mem_read_function_t* const mem_read_map[] = {
@@ -106,10 +106,10 @@ static mem_read_function_t* const mem_read_map[] = {
     mem_read_rom,       // 1XXX
     mem_read_rom,       // 2XXX
     mem_read_rom,       // 3XXX
-    mem_read_mbc_rom,       // 4XXX
-    mem_read_mbc_rom,       // 5XXX
-    mem_read_mbc_rom,       // 6XXX
-    mem_read_mbc_rom,       // 7XXX
+    mem_read_mbc_rom,   // 4XXX
+    mem_read_mbc_rom,   // 5XXX
+    mem_read_mbc_rom,   // 6XXX
+    mem_read_mbc_rom,   // 7XXX
 
     mem_read_vram,      // 8XXX
     mem_read_vram,      // 9XXX
@@ -120,7 +120,7 @@ static mem_read_function_t* const mem_read_map[] = {
     mem_read_ram,       // CXXX
     mem_read_ram,       // DXXX
     mem_read_ram,       // EXXX
-    mem_read_high_ram,  // FXXX
+    mem_read_hram,  // FXXX
 };
 
 /* MEMORY WRITES */
@@ -128,44 +128,44 @@ static mem_read_function_t* const mem_read_map[] = {
 /**
  * Write to the ROM bank on the cartridge
  */
-static void mem_write_mbc_rom(uint16_t address, uint8_t value) {
+static void mem_write_mbc_rom(gb_t *gb, uint16_t address, uint8_t value) {
     // TODO: Can't write here. this controls memory bank switching
 }
 
 /**
  * Write to the vram
  */
-static void mem_write_vram(uint16_t address, uint8_t value) {
-    get_gb_instance()->vram[address & 0x1FFF] = value;
+static void mem_write_vram(gb_t *gb, uint16_t address, uint8_t value) {
+    gb->vram[address & 0x1FFF] = value;
 }
 
 /**
  * Write to the switchable RAM bank on the cartridge
  */
-static void mem_write_mbc_ram(uint16_t address, uint8_t value) {
-    get_gb_instance()->mbc_ram[address & 0x1FFF] = value;
+static void mem_write_mbc_ram(gb_t *gb, uint16_t address, uint8_t value) {
+    gb->mbc_ram[address & 0x1FFF] = value;
 }
 
 /**
  * Write to the internal RAM
  */
-static void mem_write_ram(uint16_t address, uint8_t value) {
-    get_gb_instance()->ram[address & 0x1FFF] = value;
+static void mem_write_ram(gb_t *gb, uint16_t address, uint8_t value) {
+    gb->ram[address & 0x1FFF] = value;
 }
 
 /**
  * Write to the high RAM sections
  */
-static void mem_write_high_ram(uint16_t address, uint8_t value) {
+static void mem_write_high_ram(gb_t *gb, uint16_t address, uint8_t value) {
     if (address < 0xFE00) {
         // Shadow copy of ram
-        mem_write_ram(address, value);
+        mem_write_ram(gb, address, value);
         return;
     }
 
     if (address < 0xFEA0) {
         // OAM
-        get_gb_instance()->oam[address & 0xFF] = value;
+        gb->oam[address & 0xFF] = value;
         return;
     }
 
@@ -179,11 +179,10 @@ static void mem_write_high_ram(uint16_t address, uint8_t value) {
 
         if (address == 0xFF50 && value) {
             // Disable in bios
-            mem_remove_bios();
-            printf("bios done\r\n");
+            mem_remove_bios(gb);
         }
 
-        get_gb_instance()->io_registers[address & 0xFF] = value;
+        gb->io_registers[address & 0xFF] = value;
         return;
     }
 
@@ -192,7 +191,7 @@ static void mem_write_high_ram(uint16_t address, uint8_t value) {
         return;
     }
 
-    get_gb_instance()->high_speed_ram[address - 0xFF80] = value;
+    gb->hram[address - 0xFF80] = value;
 }
 
 static mem_write_function_t* const mem_write_map[] = {
@@ -217,16 +216,16 @@ static mem_write_function_t* const mem_write_map[] = {
     mem_write_high_ram,  // FXXX
 };
 
-void mem_init() {
+void mem_init(gb_t *gb) {
     get_gb_instance()->rom = malloc(ROM_SIZE);
     get_gb_instance()->vram = malloc(VRAM_SIZE);
     get_gb_instance()->mbc_ram = malloc(MBC_RAM_SIZE);
     get_gb_instance()->ram = malloc(RAM_SIZE);
     get_gb_instance()->io_registers = malloc(IO_REGISTER_SIZE);
-    get_gb_instance()->high_speed_ram = malloc(HIGH_SPEED_RAM_SIZE);
+    get_gb_instance()->hram = malloc(HIGH_SPEED_RAM_SIZE);
 }
 
-void mem_load_rom(const char *fname) {
+void mem_load_rom(gb_t *gb, const char *fname) {
     // File object
     FILE *f;
 
@@ -234,29 +233,29 @@ void mem_load_rom(const char *fname) {
     f = fopen(fname, "rb");
 
     // Load 32768 bytes into the rom
-    fread(get_gb_instance()->rom, ROM_SIZE, 1, f);
+    fread(gb->rom, ROM_SIZE, 1, f);
 
     // Close
     fclose(f);
 }
 
-uint8_t mem_read_byte(uint16_t address) {
-    return mem_read_map[address >> 12](address);
+uint8_t mem_read_byte(gb_t *gb, uint16_t address) {
+    return mem_read_map[address >> 12](gb, address);
 }
 
-void mem_write_byte(uint16_t address, uint8_t val) {
-    mem_write_map[address >> 12](address, val);
+void mem_write_byte(gb_t *gb, uint16_t address, uint8_t val) {
+    mem_write_map[address >> 12](gb, address, val);
 }
 
-uint16_t mem_read_16(uint16_t address) {
-    return (mem_read_byte(address + 1) << 8) | mem_read_byte(address); 
+uint16_t mem_read_word(gb_t *gb, uint16_t address) {
+    return (mem_read_byte(gb, address + 1) << 8) | mem_read_byte(gb, address); 
 }
 
-void mem_write_16(uint16_t address, uint16_t val) {
-    mem_write_byte(address, val & 0xFF);
-    mem_write_byte(address + 1, val >> 8);
+void mem_write_word(gb_t *gb, uint16_t address, uint16_t val) {
+    mem_write_byte(gb, address, val & 0xFF);
+    mem_write_byte(gb, address + 1, val >> 8);
 }
 
-void mem_remove_bios() {
-    get_gb_instance()->in_bios = 0;
+void mem_remove_bios(gb_t *gb) {
+    gb->in_bios = 0;
 }

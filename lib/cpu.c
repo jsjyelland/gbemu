@@ -1,2989 +1,1945 @@
 #include <cpu.h>
 
-#define OPCODE_DEBUG 1
+#define OPCODE_DEBUG 0
 
-// CPU registers
-static uint8_t a, b, c, d, e, f, h, l;
+/* HELPER FUNCTIONS */
 
-// 16-Bit combined registers
-#define AF_R() ((a << 8) | f)
-#define AF_W(n) a = ((n) >> 8); f = (n) & 0xFF
+#define REG_A_PARAM 0b111
+#define REG_B_PARAM 0b000
+#define REG_C_PARAM 0b001
+#define REG_D_PARAM 0b010
+#define REG_E_PARAM 0b011
+#define REG_H_PARAM 0b100
+#define REG_L_PARAM 0b101
 
-#define BC_R() ((b << 8) | c)
-#define BC_W(n) b = ((n) >> 8); c = (n) & 0xFF
+#define OPCODE_PARAM_HIGH(opcode) ((opcode >> 3) & 0b111)
+#define OPCODE_PARAM_LOW(opcode) (opcode & 0b111)
 
-#define DE_R() ((d << 8) | e)
-#define DE_W(n) d = ((n) >> 8); e = (n) & 0xFF
+/**
+ * Return a pointer to the cpu register given the opcode param
+ */
+static uint8_t* cpu_register_for_param(gb_t *gb, uint8_t param) {
+    switch (param) {
+        case REG_A_PARAM:
+            return &(gb->cpu.a);
 
-#define HL_R() ((h << 8) | l)
-#define HL_W(n) h = ((n) >> 8); l = (n) & 0xFF
+        case REG_B_PARAM:
+            return &(gb->cpu.b);
 
-// Stack pointer
-static uint16_t sp;
+        case REG_C_PARAM:
+            return &(gb->cpu.c);
 
-// Program counter
-static uint16_t pc;
+        case REG_D_PARAM:
+            return &(gb->cpu.d);
 
-// Cycle counter
-static uint32_t cpu_cycles;
+        case REG_E_PARAM:
+            return &(gb->cpu.e);
 
-// Flag register getters
-#define FLAG_Z !!(f & (1 << 7))
-#define FLAG_N !!(f & (1 << 6))
-#define FLAG_H !!(f & (1 << 5))
-#define FLAG_C !!(f & (1 << 4))
+        case REG_H_PARAM:
+            return &(gb->cpu.h);
 
-// Flag register setters
-#define Z_SET() f |= 1 << 7
-#define N_SET() f |= 1 << 6
-#define H_SET() f |= 1 << 5
-#define C_SET() f |= 1 << 4
+        case REG_L_PARAM:
+            return &(gb->cpu.l);
 
-#define Z_RESET() f &= ~(1 << 7)
-#define N_RESET() f &= ~(1 << 6)
-#define H_RESET() f &= ~(1 << 5)
-#define C_RESET() f &= ~(1 << 4)
-
-#define FLAGS_RESET() f = 0
-
-// Flag helper functions
-
-static void zero_check(uint16_t result) {
-    if (!(result & 0xFF)) {
-        Z_SET();
+        default:
+            return NULL;
     }
 }
 
-static void carry_check(uint16_t result) {
-    if (result > 0xFF) {
-        C_SET();
+#define CC_NZ 0b00
+#define CC_Z 0b01
+#define CC_NC 0b10
+#define CC_C 0b11
+
+/**
+ * Return the flag boolean expression for a cc value
+ */
+static uint8_t cpu_cc_for_param(gb_t *gb, uint8_t param) {
+    switch (param) {
+        case CC_NZ:
+            return !gb->cpu.flag_z;
+
+        case CC_Z:
+            return gb->cpu.flag_z;
+
+        case CC_NC:
+            return !gb->cpu.flag_c;
+
+        case CC_C:
+            return gb->cpu.flag_c;
+
+        default:
+            return 0;
     }
 }
 
-static void half_carry_check(uint8_t a, uint8_t b) {
-    if ((a & 0xF) + (b & 0xF) > 0xF) {
-        H_SET();
-    }
+/**
+ * Read a byte from the memory at the program counter,
+ * incrementing the counter
+ */
+static uint8_t cpu_read_program(gb_t *gb) {
+    uint8_t val = mem_read_byte(gb, (gb->cpu.pc)++);
+    return val;
 }
 
-// Retreive arguments
 
 /**
  * Retrieve unsigned 8-bit immediate argument
  */
-uint8_t uarg8() {
+uint8_t cpu_read_n(gb_t *gb) {
     #if OPCODE_DEBUG
-        if (!get_gb_instance()->in_bios) printf("Uarg8: %X\r\n", mem_read_byte(pc));
+       printf("n: 0x%X\r\n", mem_read_byte(gb, gb->cpu.pc));
     #endif
-    return mem_read_byte(pc++);
+
+    return cpu_read_program(gb);
 }
 
 /**
  * Retrieve signed 8-bit immediate argument
  */
-int8_t arg8() {
+int8_t cpu_read_e(gb_t *gb) {
     #if OPCODE_DEBUG
-        if (!get_gb_instance()->in_bios) printf("Arg8: %X\r\n", mem_read_byte(pc));
+        printf("e: 0x%X\r\n", mem_read_byte(gb, gb->cpu.pc));
     #endif
-    return mem_read_byte(pc++);
+
+    return (int8_t)cpu_read_program(gb);
 }
 
 /**
  * Retrieve unsigned 16-bit immediate argument
  */
-uint16_t uarg16() {
+uint16_t cpu_read_nn(gb_t *gb) {
     #if OPCODE_DEBUG
-        if (!get_gb_instance()->in_bios) printf("Arg16: %X\r\n", mem_read_16(pc));
+        printf("nn: 0x%X\r\n", mem_read_word(gb, gb->cpu.pc));
     #endif
-    uint16_t arg = mem_read_16(pc);
-    pc += 2;
+    
+    uint16_t arg = mem_read_word(gb, gb->cpu.pc);
+    gb->cpu.pc += 2;
+
     return arg;
 }
 
-/* INSTRUCTIONS */
-
-// 8-Bit loads
-
 /**
- * LD r,n
- * Put value n into r
+ * Check for carry in add (a + b)
  */
-static void ld_r_n(uint8_t *r, uint8_t n) {
-    *(r) = n;
-    cpu_cycles += 8;
+static void carry_check_add(gb_t *gb, uint8_t a, uint8_t b) {
+    gb->cpu.flag_c = (((uint16_t)a + (uint16_t)b) > 0xFF);
 }
 
 /**
- * LD r1,r2
- * Put value r2 into r1
+ * Check for carry in 16 bit add (a + b)
  */
-static void ld_r1_r2(uint8_t *r1, uint8_t *r2) {
-    *(r1) = *(r2);
-    cpu_cycles += 4;
+static void carry_check_add_word(gb_t *gb, uint16_t a, uint16_t b) {
+    gb->cpu.flag_c = (((uint32_t)a + (uint32_t)b > 0xFFFF));
 }
 
 /**
- * LD r,(addr)
- * Put value at addr into r1
+ * Check for carry in subtract (a - b)
  */
-static void ld_r_addr(uint8_t *r, uint16_t addr) {
-    *(r) = mem_read_16(addr);
-    cpu_cycles += 8;
+static void carry_check_sub(gb_t *gb, uint8_t a, uint8_t b) {
+    gb->cpu.flag_c = (a < b);
 }
 
 /**
- * LD (addr),r
- * Put value in r into addr
+ * Check for carry in 16-bit subtract (a - b)
  */
-static void ld_addr_r(uint8_t *r, uint16_t addr) {
-    mem_write_byte(addr, *(r));
-    cpu_cycles += 8;
+static void carry_check_sub_word(gb_t *gb, uint16_t a, uint16_t b) {
+    gb->cpu.flag_c = (a < b);
 }
 
 /**
- * LD (addr),n
- * Put value n into addr
+ * Check for zero result and set flag
  */
-static void ld_addr_n(uint8_t n, uint16_t addr) {
-    mem_write_byte(addr, n);
-    cpu_cycles += 12;
-}
-
-#define LD_A_A() ld_r1_r2(&a, &a)
-#define LD_A_B() ld_r1_r2(&a, &b)
-#define LD_A_C() ld_r1_r2(&a, &c)
-#define LD_A_D() ld_r1_r2(&a, &d)
-#define LD_A_E() ld_r1_r2(&a, &e)
-#define LD_A_H() ld_r1_r2(&a, &h)
-#define LD_A_L() ld_r1_r2(&a, &l)
-
-#define LD_B_A() ld_r1_r2(&b, &a)
-#define LD_B_B() ld_r1_r2(&b, &b)
-#define LD_B_C() ld_r1_r2(&b, &c)
-#define LD_B_D() ld_r1_r2(&b, &d)
-#define LD_B_E() ld_r1_r2(&b, &e)
-#define LD_B_H() ld_r1_r2(&b, &h)
-#define LD_B_L() ld_r1_r2(&b, &l)
-
-#define LD_C_A() ld_r1_r2(&c, &a)
-#define LD_C_B() ld_r1_r2(&c, &b)
-#define LD_C_C() ld_r1_r2(&c, &c)
-#define LD_C_D() ld_r1_r2(&c, &d)
-#define LD_C_E() ld_r1_r2(&c, &e)
-#define LD_C_H() ld_r1_r2(&c, &h)
-#define LD_C_L() ld_r1_r2(&c, &l)
-
-#define LD_D_A() ld_r1_r2(&d, &a)
-#define LD_D_B() ld_r1_r2(&d, &b)
-#define LD_D_C() ld_r1_r2(&d, &c)
-#define LD_D_D() ld_r1_r2(&d, &d)
-#define LD_D_E() ld_r1_r2(&d, &e)
-#define LD_D_H() ld_r1_r2(&d, &h)
-#define LD_D_L() ld_r1_r2(&d, &l)
-
-#define LD_E_A() ld_r1_r2(&e, &a)
-#define LD_E_B() ld_r1_r2(&e, &b)
-#define LD_E_C() ld_r1_r2(&e, &c)
-#define LD_E_D() ld_r1_r2(&e, &d)
-#define LD_E_E() ld_r1_r2(&e, &e)
-#define LD_E_H() ld_r1_r2(&e, &h)
-#define LD_E_L() ld_r1_r2(&e, &l)
-
-#define LD_H_A() ld_r1_r2(&h, &a)
-#define LD_H_B() ld_r1_r2(&h, &b)
-#define LD_H_C() ld_r1_r2(&h, &c)
-#define LD_H_D() ld_r1_r2(&h, &d)
-#define LD_H_E() ld_r1_r2(&h, &e)
-#define LD_H_H() ld_r1_r2(&h, &h)
-#define LD_H_L() ld_r1_r2(&h, &l)
-
-#define LD_L_A() ld_r1_r2(&l, &a)
-#define LD_L_B() ld_r1_r2(&l, &b)
-#define LD_L_C() ld_r1_r2(&l, &c)
-#define LD_L_D() ld_r1_r2(&l, &d)
-#define LD_L_E() ld_r1_r2(&l, &e)
-#define LD_L_H() ld_r1_r2(&l, &h)
-#define LD_L_L() ld_r1_r2(&l, &l)
-
-#define LD_A_N() ld_r_n(&a, uarg8())
-#define LD_B_N() ld_r_n(&b, uarg8())
-#define LD_C_N() ld_r_n(&c, uarg8())
-#define LD_D_N() ld_r_n(&d, uarg8())
-#define LD_E_N() ld_r_n(&e, uarg8())
-#define LD_H_N() ld_r_n(&h, uarg8())
-#define LD_L_N() ld_r_n(&l, uarg8())
-
-#define LD_A_AHL() ld_r_addr(&a, HL_R())
-#define LD_B_AHL() ld_r_addr(&b, HL_R())
-#define LD_C_AHL() ld_r_addr(&c, HL_R())
-#define LD_D_AHL() ld_r_addr(&d, HL_R())
-#define LD_E_AHL() ld_r_addr(&e, HL_R())
-#define LD_H_AHL() ld_r_addr(&h, HL_R())
-#define LD_L_AHL() ld_r_addr(&l, HL_R())
-
-#define LD_AHL_A() ld_addr_r(&a, HL_R())
-#define LD_AHL_B() ld_addr_r(&b, HL_R())
-#define LD_AHL_C() ld_addr_r(&c, HL_R())
-#define LD_AHL_D() ld_addr_r(&d, HL_R())
-#define LD_AHL_E() ld_addr_r(&e, HL_R())
-#define LD_AHL_H() ld_addr_r(&h, HL_R())
-#define LD_AHL_L() ld_addr_r(&l, HL_R())
-
-#define LD_AHL_N() ld_addr_n(uarg8(), HL_R())
-
-#define LD_A_ABC() ld_r_addr(&a, BC_R())
-#define LD_A_ADE() ld_r_addr(&a, DE_R())
-
-#define LD_A_AC() ld_r_addr(&a, 0xFF00 + c)
-#define LD_AC_A() ld_addr_r(&a, 0xFF00 + c)
-
-#define LD_A_AN() ld_r_addr(&a, 0xFF00 + uarg8()); cpu_cycles += 4
-#define LD_AN_A() ld_addr_r(&a, 0xFF00 + uarg8()); cpu_cycles += 4
-
-#define LD_A_ANN() ld_r_addr(&a, uarg16()); cpu_cycles += 8
-#define LD_ANN_A() ld_addr_r(&a, uarg16()); cpu_cycles += 8
-
-#define LD_A_AHLI() LD_A_AHL(); HL_W(HL_R() + 1)
-#define LD_A_AHLD() LD_A_AHL(); HL_W(HL_R() - 1)
-
-#define LD_ABC_A() ld_addr_r(&a, BC_R())
-#define LD_ADE_A() ld_addr_r(&a, DE_R())
-
-#define LD_AHLI_A() LD_AHL_A(); HL_W(HL_R() + 1)
-#define LD_AHLD_A() LD_AHL_A(); HL_W(HL_R() - 1)
-
-// 16-Bit loads
-
-/**
- * LD bc,nn
- * Put value nn into bc
- */
-static void ld_rbc_nn(uint16_t nn) {
-    BC_W(nn);
-    cpu_cycles += 12;
+static void zero_check(gb_t *gb, uint16_t result) {
+    gb->cpu.flag_z = result == 0;
 }
 
 /**
- * LD de,nn
- * Put value nn into de
+ * Check for half carry in add (a + b)
  */
-static void ld_rde_nn(uint16_t nn) {
-    DE_W(nn);
-    cpu_cycles += 12;
+static void half_carry_check_add(gb_t *gb, uint8_t a, uint8_t b) {
+    gb->cpu.flag_h = ((a & 0xF) + (b & 0xF)) > 0xF;
 }
 
 /**
- * LD hl,nn
- * Put value nn into hl
+ * Check for half carry in 16-bit add (a + b)
  */
-static void ld_rhl_nn(uint16_t nn) {
-    HL_W(nn);
-    cpu_cycles += 12;
+static void half_carry_check_add_word(gb_t *gb, uint16_t a, uint16_t b) {
+    gb->cpu.flag_h = ((a & 0xFFF) + (b & 0xFFF)) > 0xFFF;
+}
+
+
+/**
+ * Check for half carry in subtract (a - b)
+ */
+static void half_carry_check_sub(gb_t *gb, uint8_t a, uint8_t b) {
+    gb->cpu.flag_h = ((a & 0xF) < (b & 0xF));
+}
+
+/* BEGIN INSTRUCTIONS REFACTOR */
+
+typedef uint8_t cpu_instruction_t(gb_t *gb, uint8_t opcode);
+
+// Instruction naming convention
+// 
+// r -> 8-bit register
+// rr -> 16-bit register
+// n -> immediate 8-bit unsigned
+// nn -> immediate 16-bit unsigned
+// e -> immediate 8-bit signed
+// m<x> -> value at memory address of <x>
+// 
+
+// 8-bit loads
+
+/**
+ * Load register r2 into r1.
+ * 
+ * 1 machine cycle
+ */
+static uint8_t ld_r_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r1 = cpu_register_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+    uint8_t *r2 = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+
+    *r1 = *r2;
+
+    return 1;
 }
 
 /**
- * LD sp,nn
- * Put value nn into sp
+ * Load immediate value into r
+ * 
+ * 2 machine cycles
  */
-static void ld_rsp_nn(uint16_t nn) {
-    sp = nn;
-    cpu_cycles += 12;
+static uint8_t ld_r_n(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+
+    *r = cpu_read_n(gb);
+
+    return 2;
 }
 
 /**
- * LD sp,hl
- * Put value of hl into sp
+ * Load value at (hl) into r
+ * 
+ * 2 machine cycles
  */
-static void ld_rsp_rhl() {
-    sp = HL_R();
-    cpu_cycles += 8;
+static uint8_t ld_r_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+
+    *r = mem_read_byte(gb, gb->cpu.hl);
+
+    return 2;
 }
 
 /**
- * PUSH qq
- * Push value in register pair qq onto the stack.
- * r1 should be the higher byte in the pair.
- * Decrement sp twice
+ * Load value in r into (hl)
+ *
+ * 2 machine cycles
  */
-static void push_nn(uint8_t *r1, uint8_t *r2) {
-    sp--;
-    mem_write_byte(sp, *(r1));
-    sp--;
-    mem_write_byte(sp, *(r2));
-    cpu_cycles += 16;
+static uint8_t ld_mhl_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+
+    mem_write_byte(gb, gb->cpu.hl, *r);
+
+    return 2;
 }
 
 /**
- * POP qq
- * Pop two bytes off the stack into register pair qq.
- * r1 should be the higher byte in the pair.
- * Increment sp twice
+ * Load immediate value into (hl)
+ * 
+ * 3 machine cycles
  */
-static void pop_nn(uint8_t *r1, uint8_t *r2) {
-    *(r2) = mem_read_byte(sp);
-    sp++;
-    *(r1) = mem_read_byte(sp);
-    sp++;
-    cpu_cycles += 12;
+static uint8_t ld_mhl_n(gb_t *gb, uint8_t opcode) {
+    mem_write_byte(gb, gb->cpu.hl, cpu_read_n(gb));
+
+    return 3;
 }
 
 /**
- * Load sp + signed byte operand n in hl
+ * Load (bc) into a
+ * 
+ * 2 machine cycles
  */
-static void ldhl_n(int8_t n) {
-    FLAGS_RESET();
+static uint8_t ld_a_mbc(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a = mem_read_byte(gb, gb->cpu.bc);
 
-    uint16_t result = sp + n;
+    return 2;
+}
 
-    // Flags
-    if (n >= 0) {
-        if ((sp & 0xFF) + n > 0xFF) {
-            C_SET();
-        }
+/**
+ * Load (de) into a
+ *
+ * 2 machine cycles
+ */
+static uint8_t ld_a_mde(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a = mem_read_byte(gb, gb->cpu.de);
 
-        if ((sp & 0xF) + n > 0xF) {
-            H_SET();
-        }
+    return 2;
+}
+
+/**
+ * Load (nn) into a
+ * 
+ * 4 machine cycles
+ */
+static uint8_t ld_a_mnn(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a = cpu_read_nn(gb);
+
+    return 4;
+}
+
+/**
+ * Load a into (bc)
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ld_mbc_a(gb_t *gb, uint8_t opcode) {
+    mem_write_byte(gb, gb->cpu.bc, gb->cpu.a);
+
+    return 2;
+}
+
+/**
+ * Load a into (de)
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ld_mde_a(gb_t *gb, uint8_t opcode) {
+    mem_write_byte(gb, gb->cpu.de, gb->cpu.a);
+
+    return 2;
+}
+
+/**
+ * Load a into (nn)
+ * 
+ * 4 machine cycles
+ */
+static uint8_t ld_mnn_a(gb_t *gb, uint8_t opcode) {
+    mem_write_byte(gb, cpu_read_nn(gb), gb->cpu.a);
+
+    return 4;
+}
+
+/**
+ * Load high (0xFF00 + n) into a
+ * 
+ * 3 machine cycles
+ */
+static uint8_t ldh_a_mn(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a = mem_read_byte(gb, 0xFF00 + cpu_read_n(gb));
+
+    return 3;
+}
+
+/**
+ * Load high a into (0xFF00 + n)
+ * 
+ * 3 machine cycles
+ */
+static uint8_t ldh_mn_a(gb_t *gb, uint8_t opcode) {
+    mem_write_byte(gb, 0xFF00 + cpu_read_n(gb), gb->cpu.a);
+
+    return 3;
+}
+
+/**
+ * Load high (0xFF00 + c) into a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ldh_a_mc(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a = mem_read_byte(gb, 0xFF00 + gb->cpu.c);
+
+    return 2;
+}
+
+/**
+ * Load high a into (0xFF00 + c)
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ldh_mc_a(gb_t *gb, uint8_t opcode) {
+    mem_write_byte(gb, 0xFF00 + gb->cpu.c, gb->cpu.a);
+
+    return 3;
+}
+
+/**
+ * Load a into (hl) and increment hl
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ldi_mhl_a(gb_t *gb, uint8_t opcode) {
+    mem_write_byte(gb, (gb->cpu.hl)++, gb->cpu.a);
+
+    return 2;
+}
+
+/**
+ * Load (hl) into a and increment hl
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ldi_a_mhl(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a = mem_read_byte(gb, (gb->cpu.hl)++);
+
+    return 2;
+}
+
+/**
+ * Load a into (hl) and decrement hl
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ldd_mhl_a(gb_t *gb, uint8_t opcode) {
+    mem_write_byte(gb, (gb->cpu.hl)--, gb->cpu.a);
+
+    return 2;
+}
+
+/**
+ * Load (hl) into a and decrement hl
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ldd_a_mhl(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a = mem_read_byte(gb, (gb->cpu.hl)--);
+
+    return 2;
+}
+
+// 16-bit loads
+
+/**
+ * Load 16 bit immediate into rr
+ * 
+ * 3 machine cycles
+ */
+static uint8_t ld_rr_nn(gb_t *gb, uint8_t opcode) {
+    uint16_t *r;
+
+    switch (OPCODE_PARAM_HIGH(opcode) >> 1) {
+        case 0b00:
+            r = &gb->cpu.bc;
+            break;
+
+        case 0b01:
+            r = &gb->cpu.de;
+            break;
+
+        case 0b10:
+            r = &gb->cpu.hl;
+            break;
+
+        case 0b11:
+            r = &gb->cpu.sp;
+            break;
+    }
+
+    *r = cpu_read_nn(gb);
+
+    return 3;
+}
+
+/**
+ * Load sp into (nn)
+ * 
+ * 5 machine cycles
+ */
+static uint8_t ld_mnn_sp(gb_t *gb, uint8_t opcode) {
+    mem_write_word(gb, cpu_read_nn(gb), gb->cpu.sp);
+
+    return 5;
+}
+
+/**
+ * Load hl into sp
+ * 
+ * 2 machine cycles
+ */
+static uint8_t ld_sp_hl(gb_t *gb, uint8_t opcode) {
+    gb->cpu.sp = gb->cpu.hl;
+
+    return 2;
+}
+
+/**
+ * Push rr onto the stack
+ * 
+ * 4 machine cycles
+ */
+static uint8_t push_rr(gb_t *gb, uint8_t opcode) {
+    uint16_t *r;
+
+    switch (OPCODE_PARAM_HIGH(opcode) >> 1) {
+        case 0b00:
+            r = &gb->cpu.bc;
+            break;
+
+        case 0b01:
+            r = &gb->cpu.de;
+            break;
+
+        case 0b10:
+            r = &gb->cpu.hl;
+            break;
+
+        case 0b11:
+            r = &gb->cpu.af;
+            break;
+    }
+
+    gb->cpu.sp -= 2;
+    mem_write_word(gb, gb->cpu.sp, *r);
+
+    return 4;
+}
+
+/**
+ * Pop rr off the stack
+ * 
+ * 3 machine cycles
+ */
+static uint8_t pop_rr(gb_t *gb, uint8_t opcode) {
+    uint16_t *r;
+
+    switch (OPCODE_PARAM_HIGH(opcode) >> 1) {
+        case 0b00:
+            r = &gb->cpu.bc;
+            break;
+
+        case 0b01:
+            r = &gb->cpu.de;
+            break;
+
+        case 0b10:
+            r = &gb->cpu.hl;
+            break;
+
+        case 0b11:
+            r = &gb->cpu.af;
+            break;
+    }
+
+    *r = mem_read_word(gb, gb->cpu.sp);
+    gb->cpu.sp += 2;
+
+    return 3;
+}
+
+/**
+ * Load sp + immediate signed into hl
+ *
+ * 3 machine cycles
+ */
+static uint8_t ld_hl_spe(gb_t *gb, uint8_t opcode) {
+    gb->cpu.f = 0;
+
+    int8_t e = cpu_read_e(gb);
+
+    if (e >= 0) {
+        carry_check_add_word(gb, gb->cpu.sp, e);
     } else {
-        if ((result & 0xFF) <= (sp & 0xFF)) {
-            C_SET();
-        }
-
-        if ((result & 0xF) <= (sp & 0xF)) {
-            H_SET();
-        }
+        carry_check_sub_word(gb, gb->cpu.sp, -e);
     }
+
+    // Half carry behaviour unknown, won't bother implementing for now
+
+    gb->cpu.hl = gb->cpu.sp + e;
+
+    return 3;
+}
+
+// 8-bit ALU
+
+/**
+ * Helper function for adding n to a
+ */
+static void add_helper(gb_t *gb, uint8_t n) {
+    gb->cpu.f = 0;
+
+    carry_check_add(gb, gb->cpu.a, n);
+    half_carry_check_add(gb, gb->cpu.a, n);
+
+    gb->cpu.a = gb->cpu.a + n;
+
+    zero_check(gb, gb->cpu.a);
+}
+
+/**
+ * Add r to a and store in a
+ * 
+ * 1 machine cycle
+ */
+static uint8_t add_a_r(gb_t *gb, uint8_t opcode) {
+    add_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
+
+    return 1;
+}
+
+/**
+ * Add immediate to a and store in a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t add_a_n(gb_t *gb, uint8_t opcode) {
+    add_helper(gb, cpu_read_n(gb));
+
+    return 2;
+}
+
+/**
+ * Add (hl) to a and store in a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t add_a_mhl(gb_t *gb, uint8_t opcode) {
+    add_helper(gb, mem_read_byte(gb, gb->cpu.hl));
+
+    return 2;
+}
+
+/**
+ * Add with carry r to a and store in a
+ * 
+ * 1 machine cycle
+ */
+static uint8_t adc_a_r(gb_t *gb, uint8_t opcode) {
+    add_helper(gb, gb->cpu.flag_c + *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
+
+    return 1;
+}
+
+/**
+ * Add with carry immediate to a and store in a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t adc_a_n(gb_t *gb, uint8_t opcode) {
+    add_helper(gb, gb->cpu.flag_c + cpu_read_n(gb));
+
+    return 2;
+}
+
+/**
+ * Add with carry (hl) to a and store in a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t adc_a_mhl(gb_t *gb, uint8_t opcode) {
+    add_helper(gb, gb->cpu.flag_c + mem_read_byte(gb, gb->cpu.hl));
+
+    return 2;
+}
+
+/**
+ * Helper function for subtracting n from a
+ */
+static void sub_helper(gb_t *gb, uint8_t n) {
+    gb->cpu.f = 0;
+    gb->cpu.flag_n = 1;
+
+    carry_check_sub(gb, gb->cpu.a, n);
+    half_carry_check_sub(gb, gb->cpu.a, n);
+
+    gb->cpu.a = gb->cpu.a - n;
+
+    zero_check(gb, gb->cpu.a);
+}
+
+/**
+ * Subtract r from a and store in a
+ * 
+ * 1 machine cycle
+ */
+static uint8_t sub_a_r(gb_t *gb, uint8_t opcode) {
+    sub_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
+
+    return 1;
+}
+
+/**
+ * Subtract immediate from a and store in a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t sub_a_n(gb_t *gb, uint8_t opcode) {
+    sub_helper(gb, cpu_read_n(gb));
+
+    return 2;
+}
+
+/**
+ * Subtract (hl) from a and store in a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t sub_a_mhl(gb_t *gb, uint8_t opcode) {
+    sub_helper(gb, mem_read_byte(gb, gb->cpu.hl));
+
+    return 2;
+}
+
+/**
+ * Subtract with carry r from a and store in a
+ * 
+ * 1 machine cycle
+ */
+static uint8_t sbc_a_r(gb_t *gb, uint8_t opcode) {
+    sub_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)) - gb->cpu.flag_c);
+
+    return 1;
+}
+
+/**
+ * Subtract with carry immediate from a and store in a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t sbc_a_n(gb_t *gb, uint8_t opcode) {
+    sub_helper(gb, cpu_read_n(gb) - gb->cpu.flag_c);
+
+    return 2;
+}
+
+/**
+ * Subtract with carry (hl) from a and store in a
+ * 
+ * 2 machine cycles
+ */
+static uint8_t sbc_a_mhl(gb_t *gb, uint8_t opcode) {
+    sub_helper(gb, mem_read_byte(gb, gb->cpu.hl) - gb->cpu.flag_c);
+
+    return 2;
+}
+
+/**
+ * And helper for a and n
+ */
+static void and_helper(gb_t *gb, uint8_t n) {
+    gb->cpu.f = 0;
+    gb->cpu.flag_h = 1;
+    gb->cpu.a &= n;
+    zero_check(gb, gb->cpu.a);
+}
+
+/**
+ * And a with r
+ * 
+ * 1 machine cycle
+ */
+static uint8_t and_a_r(gb_t *gb, uint8_t opcode) {
+    and_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
+
+    return 1;
+}
+
+/**
+ * And a with immediate
+ * 
+ * 2 machine cycles
+ */
+static uint8_t and_a_n(gb_t *gb, uint8_t opcode) {
+    and_helper(gb, cpu_read_n(gb));
+
+    return 2;
+}
+
+/**
+ * And a with (hl)
+ * 
+ * 2 machine cycles
+ */
+static uint8_t and_a_mhl(gb_t *gb, uint8_t opcode) {
+    and_helper(gb, mem_read_byte(gb, gb->cpu.hl));
+
+    return 2;
+}
+
+/**
+ * Or helper for a and n
+ */
+static void or_helper(gb_t *gb, uint8_t n) {
+    gb->cpu.f = 0;
+    gb->cpu.a |= n;
+    zero_check(gb, gb->cpu.a);
+}
+
+/**
+ * Or a with r
+ * 
+ * 1 machine cycle
+ */
+static uint8_t or_a_r(gb_t *gb, uint8_t opcode) {
+    or_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
+
+    return 1;
+}
+
+/**
+ * Or a with immediate
+ * 
+ * 2 machine cycles
+ */
+static uint8_t or_a_n(gb_t *gb, uint8_t opcode) {
+    or_helper(gb, cpu_read_n(gb));
+
+    return 2;
+}
+
+/**
+ * Or a with (hl)
+ * 
+ * 2 machine cycles
+ */
+static uint8_t or_a_mhl(gb_t *gb, uint8_t opcode) {
+    or_helper(gb, mem_read_byte(gb, gb->cpu.hl));
+
+    return 2;
+}
+
+/**
+ * Xor helper for a and n
+ */
+static void xor_helper(gb_t *gb, uint8_t n) {
+    gb->cpu.f = 0;
+    gb->cpu.a ^= n;
+    zero_check(gb, gb->cpu.a);
+}
+
+/**
+ * Xor a with r
+ * 
+ * 1 machine cycle
+ */
+static uint8_t xor_a_r(gb_t *gb, uint8_t opcode) {
+    xor_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
+
+    return 1;
+}
+
+/**
+ * Xor a with immediate
+ * 
+ * 2 machine cycles
+ */
+static uint8_t xor_a_n(gb_t *gb, uint8_t opcode) {
+    xor_helper(gb, cpu_read_n(gb));
+
+    return 2;
+}
+
+/**
+ * Xor a with (hl)
+ * 
+ * 2 machine cycles
+ */
+static uint8_t xor_a_mhl(gb_t *gb, uint8_t opcode) {
+    xor_helper(gb, mem_read_byte(gb, gb->cpu.hl));
+
+    return 2;
+}
+
+/**
+ * Compare helper for a and n
+ */
+static void cp_helper(gb_t *gb, uint8_t n) {
+    gb->cpu.f = 0;
+    gb->cpu.flag_n = 1;
+
+    carry_check_sub(gb, gb->cpu.a, n);
+    half_carry_check_sub(gb, gb->cpu.a, n);
+
+    uint8_t result = gb->cpu.a - n;
+
+    zero_check(gb, result);
+}
+
+/**
+ * Compare a with r
+ * 
+ * 1 machine cycle
+ */
+static uint8_t cp_a_r(gb_t *gb, uint8_t opcode) {
+    cp_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
+
+    return 1;
+}
+
+/**
+ * Compare a with immediate
+ * 
+ * 2 machine cycles
+ */
+static uint8_t cp_a_n(gb_t *gb, uint8_t opcode) {
+    cp_helper(gb, cpu_read_n(gb));
+
+    return 2;
+}
+
+/**
+ * Compare a with (hl)
+ * 
+ * 2 machine cycles
+ */
+static uint8_t cp_a_mhl(gb_t *gb, uint8_t opcode) {
+    cp_helper(gb, mem_read_byte(gb, gb->cpu.hl));
+
+    return 2;
+}
+
+/**
+ * Increment r
+ * 
+ * 1 machine cycle
+ */
+static uint8_t inc_r(gb_t *gb, uint8_t opcode) {
+    gb->cpu.flag_n = 0;
+
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+
+    half_carry_check_add(gb, *r, 1);
+
+    (*r)++;
     
-    HL_W(result);
-    cpu_cycles += 12;
+    zero_check(gb, *r);
+
+    return 1;
 }
 
 /**
- * Load sp into memory at address (nn)
+ * Increment (hl)
+ * 
+ * 3 machine cycles
  */
-static void ld_ann_sp(uint16_t nn) {
-    mem_write_16(nn, sp);
-    cpu_cycles += 20;
-}
+static uint8_t inc_mhl(gb_t *gb, uint8_t opcode) {
+    gb->cpu.flag_n = 0;
 
-#define LD_BC_NN() ld_rbc_nn(uarg16())
-#define LD_DE_NN() ld_rde_nn(uarg16())
-#define LD_HL_NN() ld_rhl_nn(uarg16())
-#define LD_SP_NN() ld_rsp_nn(uarg16())
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
 
-#define LD_SP_HL() ld_rsp_rhl()
+    half_carry_check_add(gb, r, 1);
+    r++;
+    zero_check(gb, r);
 
-#define PUSH_BC() push_nn(&b, &c)
-#define PUSH_DE() push_nn(&d, &e)
-#define PUSH_HL() push_nn(&h, &l)
-#define PUSH_AF() push_nn(&a, &f)
+    mem_write_byte(gb, gb->cpu.hl, r);
 
-#define POP_AF() pop_nn(&a, &f)
-#define POP_BC() pop_nn(&b, &c)
-#define POP_DE() pop_nn(&d, &e)
-#define POP_HL() pop_nn(&h, &l)
-
-#define LDHL_SP_E() ldhl_n(arg8())
-#define LD_ANN_SP() ld_ann_sp(uarg16())
-
-// 8-Bit ALU
-
-/**
- * Add byte operand n to a and store in a
- */
-static void add_a_n(uint8_t n) {
-    FLAGS_RESET();
-    uint16_t result = a + n;
-
-    carry_check(result);
-    half_carry_check(a, n);
-    zero_check(result);
-
-    a = result & 0xFF;
-
-    cpu_cycles += 4;
+    return 3;
 }
 
 /**
- * Add contents of r to a and store in a
+ * Decrement r
+ * 
+ * 1 machine cycle
  */
-static void add_a_r(uint8_t *r) {
-    add_a_n(*(r));
-}
+static uint8_t dec_r(gb_t *gb, uint8_t opcode) {
+    gb->cpu.flag_n = 1;
 
-/**
- * Add contents of memory at addr to a and store in a
- */
-static void add_a_addr(uint16_t addr) {
-    add_a_n(mem_read_byte(addr));
-    cpu_cycles += 4;
-}
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_HIGH(opcode));
 
-/**
- * Add the contents of r to a and store in a,
- * adding c
- */
-static void adc_a_r(uint8_t *r) {
-    add_a_n(*(r) + FLAG_C);
-}
+    half_carry_check_sub(gb, *r, 1);
 
-/**
- * Add the contents of memory at addr to a and store in a,
- * adding c
- */
-static void adc_a_addr(uint16_t addr) {
-    add_a_n(mem_read_byte(addr) + FLAG_C);
-    cpu_cycles += 4;
-}
-
-/**
- * Add n to a and store in a,
- * adding c
- */
-static void adc_a_n(uint8_t n) {
-    add_a_n(n + FLAG_C);
-    cpu_cycles += 4;
-}
-
-/**
- * Subtract n from a and store the result
- * in a.
- */
-static void sub_a_n(uint8_t n) {
-    FLAGS_RESET();
-    N_SET();
-
-    uint8_t result = a - n;
-
-    // Flags
-    if (a < n) {
-        C_SET();
-    }
-
-    if ((a & 0xF) < (n & 0xF)) {
-        H_SET();
-    }
-
-    zero_check(result);
-
-    a = result;
-    cpu_cycles += 4;
-}
-
-/**
- * Subtract the value in r from a and store
- * the result in a.
- */
-static void sub_a_r(uint8_t *r) {
-    sub_a_n(*(r));
-}
-
-/**
- * Subtract the value in memory at hl from a
- * and store the result in a.
- */
-static void sub_a_addr(uint16_t addr) {
-    sub_a_n(mem_read_byte(HL_R()));
-    cpu_cycles += 4;
-}
-
-/**
- * Subtract the contents of r from a and store in a,
- * subtracting c
- */
-static void sbc_a_r(uint8_t *r) {
-    sub_a_n(*(r) - FLAG_C);
-}
-
-/**
- * Subtract the contents of memory at addr from a and store in a,
- * subtracting c
- */
-static void sbc_a_addr(uint16_t addr) {
-    sub_a_n(mem_read_byte(addr) - FLAG_C);
-    cpu_cycles += 4;
-}
-
-/**
- * Subtract n from a and store in a,
- * subtracting c
- */
-static void sbc_a_n(uint8_t n) {
-    sub_a_n(n - FLAG_C);
-    cpu_cycles += 4;
-}
-
-/**
- * And a with n, storing the result in a
- */
-static void and_a_n(uint8_t n) {
-    FLAGS_RESET();
-    H_SET();
-    a = a & n;
-    zero_check(a);
-    cpu_cycles += 4;
-}
-
-/**
- * And a with value in r, storing the result in a
- */
-static void and_a_r(uint8_t *r) {
-    and_a_n(*(r));
-}
-
-/**
- * And a with the value at memory at addr,
- * storing the result in a
- */
-static void and_a_addr(uint16_t addr) {
-    and_a_n(mem_read_byte(addr));
-    cpu_cycles += 4;
-}
-
-/**
- * Or a with n, storing the result in a
- */
-static void or_a_n(uint8_t n) {
-    FLAGS_RESET();
-    a = a | n;
-    zero_check(a);
-    cpu_cycles += 4;
-}
-
-/**
- * Or a with value in r, storing the result in a
- */
-static void or_a_r(uint8_t *r) {
-    or_a_n(*(r));
-}
-
-/**
- * Or a with the value at memory at addr,
- * storing the result in a
- */
-static void or_a_addr(uint16_t addr) {
-    or_a_n(mem_read_byte(addr));
-    cpu_cycles += 4;
-}
-
-/**
- * Xor a with n, storing the result in a
- */
-static void xor_a_n(uint8_t n) {
-    FLAGS_RESET();
-    a = a ^ n;
-    zero_check(a);
-    cpu_cycles += 4;
-}
-
-/**
- * Xor a with value in r, storing the result in a
- */
-static void xor_a_r(uint8_t *r) {
-    xor_a_n(*(r));
-}
-
-/**
- * Xor a with the value at memory at addr,
- * storing the result in a
- */
-static void xor_a_addr(uint16_t addr) {
-    xor_a_n(mem_read_byte(addr));
-    cpu_cycles += 4;
-}
-
-/**
- * Compare a with n, storing the result in a
- */
-static void cp_a_n(uint8_t n) {
-    FLAGS_RESET();
-    N_SET();
-
-    uint8_t result = a - n;
-
-    // Flags
-    if (a < n) {
-        C_SET();
-    }
-
-    if ((a & 0xF) < (n & 0xF)) {
-        H_SET();
-    }
-
-    zero_check(result);
-
-    cpu_cycles += 4;
-}
-
-/**
- * Compare a with value in r, storing the result in a
- */
-static void cp_a_r(uint8_t *r) {
-    cp_a_n(*(r));
-}
-
-/**
- * Compare a with the value at memory at addr,
- * storing the result in a
- */
-static void cp_a_addr(uint16_t addr) {
-    cp_a_n(mem_read_byte(addr));
-    cpu_cycles += 4;
-}
-
-/**
- * Increment register r by 1
- */
-static void inc_r(uint8_t *r) {
-    H_RESET();
-    N_RESET();
-    Z_RESET();
-    
-    uint16_t result = *(r) + 1;
-
-    half_carry_check(*(r), 1);
-    zero_check(result);
-
-    *(r) = result & 0xFF;
-
-    cpu_cycles += 4;
-}
-
-/**
- * Increment the value at (hl) by 1
- */
-static void inc_ahl() {
-    H_RESET();
-    N_RESET();
-    Z_RESET();
-
-    uint8_t val = mem_read_byte(HL_R());
-    uint16_t result = val + 1;
-    half_carry_check(val, 1);
-    zero_check(result);
-    mem_write_byte(HL_R(), result & 0xFF);
-
-    cpu_cycles += 12;
-}
-
-/**
- * Decrement register r by 1
- */
-static void dec_r(uint8_t *r) {
-    H_RESET();
-    N_SET();
-    Z_RESET();
-    
-    uint8_t result = *(r) - 1;
-
-    if (*(r) < 1) {
-        H_SET();
-    }
-
-    zero_check(result);
-
-    *(r) = result;
-
-    cpu_cycles += 4;
-}
-
-/**
- * Decrement the value at (hl) by 1
- */
-static void dec_ahl() {
-    H_RESET();
-    N_RESET();
-    Z_RESET();
-
-    uint8_t val = mem_read_byte(HL_R());
-    uint8_t result = val - 1;
+    (*r)--;
    
-    if (val < 1) {
-        H_SET();
-    }
+    zero_check(gb, *r);
+    return 1;
+}
+
+/**
+ * Decrement (hl)
+ * 
+ * 3 machine cycles
+ */
+static uint8_t dec_mhl(gb_t *gb, uint8_t opcode) {
+    gb->cpu.flag_n = 1;
+
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+
+    half_carry_check_sub(gb, r, 1);
+    r--;
+    zero_check(gb, r);
     
-    zero_check(result);
-    mem_write_byte(HL_R(), result);
+    mem_write_byte(gb, gb->cpu.hl, r);
 
-    cpu_cycles += 12;
+    return 3;
 }
 
-#define ADD_A_A() add_a_r(&a)
-#define ADD_A_B() add_a_r(&b)
-#define ADD_A_C() add_a_r(&c)
-#define ADD_A_D() add_a_r(&d)
-#define ADD_A_E() add_a_r(&e)
-#define ADD_A_H() add_a_r(&h)
-#define ADD_A_L() add_a_r(&l)
-#define ADD_A_N() add_a_n(uarg8()); cpu_cycles += 4
-#define ADD_A_AHL() add_a_addr(HL_R())
-
-#define ADC_A_A() adc_a_r(&a)
-#define ADC_A_B() adc_a_r(&b)
-#define ADC_A_C() adc_a_r(&c)
-#define ADC_A_D() adc_a_r(&d)
-#define ADC_A_E() adc_a_r(&e)
-#define ADC_A_H() adc_a_r(&h)
-#define ADC_A_L() adc_a_r(&l)
-#define ADC_A_N() adc_a_n(uarg8())
-#define ADC_A_AHL() adc_a_addr(HL_R())
-
-#define SUB_A_A() sub_a_r(&a)
-#define SUB_A_B() sub_a_r(&b)
-#define SUB_A_C() sub_a_r(&c)
-#define SUB_A_D() sub_a_r(&d)
-#define SUB_A_E() sub_a_r(&e)
-#define SUB_A_H() sub_a_r(&h)
-#define SUB_A_L() sub_a_r(&l)
-#define SUB_A_N() sub_a_n(uarg8()); cpu_cycles += 4
-#define SUB_A_AHL() sub_a_addr(HL_R())
-
-#define SBC_A_A() sbc_a_r(&a)
-#define SBC_A_B() sbc_a_r(&b)
-#define SBC_A_C() sbc_a_r(&c)
-#define SBC_A_D() sbc_a_r(&d)
-#define SBC_A_E() sbc_a_r(&e)
-#define SBC_A_H() sbc_a_r(&h)
-#define SBC_A_L() sbc_a_r(&l)
-#define SBC_A_N() sbc_a_n(uarg8())
-#define SBC_A_AHL() sbc_a_addr(HL_R())
-
-#define AND_A_A() and_a_r(&a)
-#define AND_A_B() and_a_r(&b)
-#define AND_A_C() and_a_r(&c)
-#define AND_A_D() and_a_r(&d)
-#define AND_A_E() and_a_r(&e)
-#define AND_A_H() and_a_r(&h)
-#define AND_A_L() and_a_r(&l)
-#define AND_A_N() and_a_n(uarg8()); cpu_cycles += 4
-#define AND_A_AHL() and_a_addr(HL_R())
-
-#define OR_A_A() or_a_r(&a)
-#define OR_A_B() or_a_r(&b)
-#define OR_A_C() or_a_r(&c)
-#define OR_A_D() or_a_r(&d)
-#define OR_A_E() or_a_r(&e)
-#define OR_A_H() or_a_r(&h)
-#define OR_A_L() or_a_r(&l)
-#define OR_A_N() or_a_n(uarg8()); cpu_cycles += 4
-#define OR_A_AHL() or_a_addr(HL_R())
-
-#define XOR_A_A() xor_a_r(&a)
-#define XOR_A_B() xor_a_r(&b)
-#define XOR_A_C() xor_a_r(&c)
-#define XOR_A_D() xor_a_r(&d)
-#define XOR_A_E() xor_a_r(&e)
-#define XOR_A_H() xor_a_r(&h)
-#define XOR_A_L() xor_a_r(&l)
-#define XOR_A_N() xor_a_n(uarg8()); cpu_cycles += 4
-#define XOR_A_AHL() xor_a_addr(HL_R())
-
-#define CP_A_A() cp_a_r(&a)
-#define CP_A_B() cp_a_r(&b)
-#define CP_A_C() cp_a_r(&c)
-#define CP_A_D() cp_a_r(&d)
-#define CP_A_E() cp_a_r(&e)
-#define CP_A_H() cp_a_r(&h)
-#define CP_A_L() cp_a_r(&l)
-#define CP_A_N() cp_a_n(uarg8()); cpu_cycles += 4
-#define CP_A_AHL() cp_a_addr(HL_R())
-
-#define INC_A() inc_r(&a)
-#define INC_B() inc_r(&b)
-#define INC_C() inc_r(&c)
-#define INC_D() inc_r(&d)
-#define INC_E() inc_r(&e)
-#define INC_H() inc_r(&h)
-#define INC_L() inc_r(&l)
-
-#define INC_AHL() inc_ahl()
-
-#define DEC_A() dec_r(&a)
-#define DEC_B() dec_r(&b)
-#define DEC_C() dec_r(&c)
-#define DEC_D() dec_r(&d)
-#define DEC_E() dec_r(&e)
-#define DEC_H() dec_r(&h)
-#define DEC_L() dec_r(&l)
-
-#define DEC_AHL() dec_ahl()
-
-// 16-Bit ALU
-
 /**
- * Add contents of register ss to hl and store result in hl
+ * Decimal adjust a
+ * 
+ * 1 machine cycle
  */
-static void add_hl_ss(uint16_t ss) {
-    C_RESET();
-    H_RESET();
-    N_RESET();
+static uint8_t daa(gb_t *gb, uint8_t opcode) {
+    int16_t result = gb->cpu.a;
 
-    uint32_t result = HL_R() + ss;
+    if (gb->cpu.flag_n) {
+        if (gb->cpu.flag_h) {
+            result = (result - 0x06) & 0xFF;
+        }
 
-    if ((HL_R() & 0xFFF) + (ss & 0xFFF) > 0xFFF) {
-        H_SET();
+        if (gb->cpu.flag_c) {
+            result -= 0x60;
+        }
+    }
+    else {
+        if ((gb->cpu.flag_h) || (result & 0x0F) > 0x09) {
+            result += 0x06;
+        }
+
+        if ((gb->cpu.flag_c) || result > 0x9F) {
+            result += 0x60;
+        }
     }
 
-    if (result > 0xFFFF) {
-        C_SET();
+    zero_check(gb, result & 0xFF);
+
+    gb->cpu.flag_c = (result & 0x100) == 0x100;
+    gb->cpu.flag_h = 0;
+
+    gb->cpu.a = result;
+
+    return 1;
+}
+
+/**
+ * 1s compliment of a
+ * 
+ * 1 machine cycle
+ */
+static uint8_t cpl(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a ^= 0xFF;
+
+    gb->cpu.flag_n = 1;
+    gb->cpu.flag_h = 1;
+
+    return 1;
+}
+
+// 16-bit ALU
+
+/**
+ * Add rr to hl
+ * 
+ * 2 machine cycles
+ */
+static uint8_t add_hl_rr(gb_t *gb, uint8_t opcode) {
+    uint16_t *r;
+
+    switch (OPCODE_PARAM_HIGH(opcode) >> 1) {
+        case 0b00:
+            r = &gb->cpu.bc;
+            break;
+
+        case 0b01:
+            r = &gb->cpu.de;
+            break;
+
+        case 0b10:
+            r = &gb->cpu.hl;
+            break;
+
+        case 0b11:
+            r = &gb->cpu.sp;
+            break;
     }
 
-    HL_W(result & 0xFFFF);
+    gb->cpu.flag_n = 0;
 
-    cpu_cycles += 8;
+    half_carry_check_add_word(gb, gb->cpu.hl, *r);
+    carry_check_add_word(gb, gb->cpu.hl, *r);
+
+    gb->cpu.hl += *r;
+
+    return 2;
 }
 
 /**
- * Add contents of e to sp and store result in sp
+ * Increment rr
+ * 
+ * 2 machine cycles
  */
-static void add_sp_e(uint8_t e) {
-    FLAGS_RESET();
+static uint8_t inc_rr(gb_t *gb, uint8_t opcode) {
+    switch (OPCODE_PARAM_HIGH(opcode) >> 1) {
+        case 0b00:
+            (gb->cpu.bc)++;
+            break;
 
-    uint32_t result = sp + e;
+        case 0b01:
+            (gb->cpu.de)++;
+            break;
 
-    if ((sp & 0xFFF) + e > 0xFFF) {
-        H_SET();
+        case 0b10:
+            (gb->cpu.hl)++;
+            break;
+
+        case 0b11:
+            (gb->cpu.sp)++;
+            break;
     }
 
-    if (result > 0xFFFF) {
-        C_SET();
+    return 2;
+}
+
+/**
+ * Decrement rr
+ * 
+ * 2 machine cycles
+ */
+static uint8_t dec_rr(gb_t *gb, uint8_t opcode) {
+    switch (OPCODE_PARAM_HIGH(opcode) >> 1) {
+        case 0b00:
+            (gb->cpu.bc)--;
+            break;
+
+        case 0b01:
+            (gb->cpu.de)--;
+            break;
+
+        case 0b10:
+            (gb->cpu.hl)--;
+            break;
+
+        case 0b11:
+            (gb->cpu.sp)--;
+            break;
     }
 
-    sp = result & 0xFFFF;
-
-    cpu_cycles += 16;
+    return 2;
 }
 
 /**
- * Increment register bc by 1
+ * Add immediate signed to sp
+ *
+ * 4 machine cycles
  */
-static void inc_bc() {
-    BC_W((BC_R() + 1) & 0xFFFF);
-    cpu_cycles += 8;
+static uint8_t add_sp_e(gb_t *gb, uint8_t opcode) {
+    gb->cpu.f = 0;
+
+    int8_t e = cpu_read_e(gb);
+
+    if (e >= 0) {
+        carry_check_add_word(gb, gb->cpu.sp, e);
+    } else {
+        carry_check_sub_word(gb, gb->cpu.sp, -e);
+    }
+
+    // Half carry behaviour unknown, won't bother implementing for now
+
+    gb->cpu.sp += e;
+
+    return 4;
 }
 
-/**
- * Increment register de by 1
- */
-static void inc_de() {
-    DE_W((DE_R() + 1) & 0xFFFF);
-    cpu_cycles += 8;
-}
+// Rotate and shift instructions
 
 /**
- * Increment register hl by 1
+ * Rotate left helper
  */
-static void inc_hl() {
-    HL_W((HL_R() + 1) & 0xFFFF);
-    cpu_cycles += 8;
-}
-
-/**
- * Increment register sp by 1
- */
-static void inc_sp() {
-    sp++;
-    cpu_cycles += 8;
-}
-
-/**
- * Decrement register bc by 1
- */
-static void dec_bc() {
-    BC_W((BC_R() - 1) & 0xFFFF);
-    cpu_cycles += 8;
-}
-
-/**
- * Decrement register de by 1
- */
-static void dec_de() {
-    DE_W((DE_R() - 1) & 0xFFFF);
-    cpu_cycles += 8;
-}
-
-/**
- * Decrement register hl by 1
- */
-static void dec_hl() {
-    HL_W((HL_R() - 1) & 0xFFFF);
-    cpu_cycles += 8;
-}
-
-/**
- * Decrement register sp by 1
- */
-static void dec_sp() {
-    sp--;
-    cpu_cycles += 8;
-}
-
-#define ADD_HL_BC() add_hl_ss(BC_R())
-#define ADD_HL_DE() add_hl_ss(DE_R())
-#define ADD_HL_HL() add_hl_ss(HL_R())
-#define ADD_HL_SP() add_hl_ss(sp)
-
-#define ADD_SP_E() add_sp_e(uarg8())
-
-#define INC_BC() inc_bc()
-#define INC_DE() inc_de()
-#define INC_HL() inc_hl()
-#define INC_SP() inc_sp()
-
-#define DEC_BC() dec_bc()
-#define DEC_DE() dec_de()
-#define DEC_HL() dec_hl()
-#define DEC_SP() dec_sp()
-
-// Rotate shift
-
-/**
- * Rotate r to the left, leaving the carried bit in the c
- * flag and in bit 0
- */
-static void rlcr(uint8_t *r) {
-    FLAGS_RESET();
-    uint16_t result = *(r) << 1;
+static uint8_t rlc_helper(gb_t *gb, uint8_t value) {
+    gb->cpu.f = 0;
+    uint16_t result = value << 1;
 
     if (!!(result & 0x100)) {
-        C_SET();
+        gb->cpu.flag_c = 1;
         result |= 0x1;
     }
 
-    *(r) = result & 0xFF;
+    result &= 0xFF;
 
-    zero_check(*(r));
+    zero_check(gb, result);
 
-    cpu_cycles += 4;
+    return result;
 }
 
 /**
- * Rotate r to the left, leaving the carried bit in the c flag
- * and what was in the c flag in bit 0.
+ * Rotate left through carry helper
  */
-static void rlr(uint8_t *r) {
-    uint8_t carry = FLAG_C;
-    uint16_t result = *(r) << 1;
+static uint8_t rl_helper(gb_t *gb, uint8_t value) {
+    uint8_t carry = gb->cpu.flag_c;
+    uint16_t result = value << 1;
 
-    FLAGS_RESET();
+    gb->cpu.f = 0;
+    gb->cpu.flag_c = !!(result & 0x100);
 
-    if (!!(result & 0x100)) {
-        C_SET();
-    }
+    result = (result & 0xFF) | carry;
 
-    *(r) = (result & 0xFF) | carry;
+    zero_check(gb, result);
 
-    zero_check(*(r));
-
-    cpu_cycles += 4;
+    return result;
 }
 
 /**
- * Rotate r to the right, leaving the carried bit in the c
- * flag and in bit 7
+ * Rotate right helper
  */
-static void rrcr(uint8_t *r) {
-    FLAGS_RESET();
-    uint8_t bit_zero = *(r) & 0x1;
-    uint8_t result = *(r) >> 1;
+static uint8_t rrc_helper(gb_t *gb, uint8_t value) {
+    gb->cpu.f = 0;
+
+    uint8_t bit_zero = value & 0x1;
+    uint8_t result = value >> 1;
 
     if (bit_zero) {
-        C_SET();
+        gb->cpu.flag_c = 1;
         result |= 0x80;
     }
 
-    *(r) = result;
+    zero_check(gb, result);
 
-    zero_check(*(r));
-
-    cpu_cycles += 4;
+    return result;
 }
 
 /**
- * Rotate r to the right, leaving the carried bit in the c flag
- * and what was in the c flag in bit 7.
+ * Rotate right through carry helper
  */
-static void rrr(uint8_t *r) {
-    uint8_t bit_zero = *(r) & 0x1;
-    uint8_t carry = FLAG_C;
+static uint8_t rr_helper(gb_t *gb, uint8_t value) {
+    uint8_t bit_zero = value & 0x1;
+    uint8_t carry = gb->cpu.flag_c;
 
-    FLAGS_RESET();
+    gb->cpu.f = 0;
 
-    uint8_t result = *(r) >> 1;
+    uint8_t result = value >> 1;
 
-    if (bit_zero) {
-        C_SET();
-    }
+    gb->cpu.flag_c = bit_zero;
 
-    *(r) = result | (carry << 7);
+    result |= (carry << 7);
 
-    zero_check(*(r));
+    zero_check(gb, result);
 
-    cpu_cycles += 4;
+    return result;
 }
 
 /**
- * RLC with the value stored in (hl)
+ * Rotate a left
+ * 
+ * 1 machine cycle
  */
-static void rlc_ahl() {
-    uint8_t val = mem_read_byte(HL_R());
-    rlcr(&val);
-    mem_write_byte(HL_R(), val);
+static uint8_t rlca(gb_t *gb, uint8_t value) {
+    gb->cpu.a = rlc_helper(gb, gb->cpu.a);
+    gb->cpu.flag_z = 0;
 
-    cpu_cycles += 12;
+    return 1;
 }
 
 /**
- * RL with the value stored in (hl)
+ * Rotate a left through carry
+ * 
+ * 1 machine cycle
  */
-static void rl_ahl() {
-    uint8_t val = mem_read_byte(HL_R());
-    rlcr(&val);
-    mem_write_byte(HL_R(), val);
+static uint8_t rla(gb_t *gb, uint8_t value) {
+    gb->cpu.a = rl_helper(gb, gb->cpu.a);
+    gb->cpu.flag_z = 0;
 
-    cpu_cycles += 12;
+    return 1;
 }
 
 /**
- * RRC with the value stored in (hl)
+ * Rotate a right
+ * 
+ * 1 machine cycle
  */
-static void rrc_ahl() {
-    uint8_t val = mem_read_byte(HL_R());
-    rlcr(&val);
-    mem_write_byte(HL_R(), val);
+static uint8_t rrca(gb_t *gb, uint8_t value) {
+    gb->cpu.a = rrc_helper(gb, gb->cpu.a);
+    gb->cpu.flag_z = 0;
 
-    cpu_cycles += 12;
+    return 1;
 }
 
 /**
- * RR with the value stored in (hl)
+ * Rotate a right through carry
+ * 
+ * 1 machine cycle
  */
-static void rr_ahl() {
-    uint8_t val = mem_read_byte(HL_R());
-    rlcr(&val);
-    mem_write_byte(HL_R(), val);
+static uint8_t rra(gb_t *gb, uint8_t opcode) {
+    gb->cpu.a = rr_helper(gb, gb->cpu.a);
+    gb->cpu.flag_z = 0;
 
-    cpu_cycles += 12;
+    return 1;
 }
 
 /**
- * Shift register r left into carry. LSB set to 0
+ * Rotate r left
+ * 
+ * 2 machine cycles
  */
-static void sla_r(uint8_t *r) {
-    FLAGS_RESET();
+static uint8_t rlc_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+    *r = rlc_helper(gb, *r);
 
-    if (!!(*(r) & 0x80)) {
-        C_SET();
-    }
-
-    *(r) = (*(r) << 1) & 0xFF;
-
-    zero_check(*(r));
-
-    cpu_cycles += 8;
+    return 2;
 }
 
 /**
- * Shift value at hl left into carry. LSB set to 0
+ * Rotate r left through carry
+ * 
+ * 2 machine cycles
  */
-static void sla_ahl() {
-    uint8_t val = mem_read_byte(HL_R());
-    sla_r(&val);
-    mem_write_byte(HL_R(), val);
-    cpu_cycles += 8;
+static uint8_t rl_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+    *r = rl_helper(gb, *r);
+
+    return 2;
 }
 
 /**
- * Shift register r right into carry. MSB not changed
+ * Rotate r right
+ * 
+ * 2 machine cycles
  */
-static void sra_r(uint8_t *r) {
-    FLAGS_RESET();
+static uint8_t rrc_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+    *r = rrc_helper(gb, *r);
 
-    if (!!(*(r) & 0x1)) {
-        C_SET();
-    }
-
-    *(r) = *(r) >> 1 | (*(r) & 0x80);
-
-    zero_check(*(r));
-
-    cpu_cycles += 8;
+    return 2;
 }
 
 /**
- * Shift value at hl right into carry. MSB not changed
+ * Rotate r right through carry
+ * 
+ * 2 machine cycles
  */
-static void sra_ahl() {
-    uint8_t val = mem_read_byte(HL_R());
-    sra_r(&val);
-    mem_write_byte(HL_R(), val);
-    cpu_cycles += 8;
+static uint8_t rr_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+
+    *r = rr_helper(gb, *r);
+
+    return 2;
 }
 
 /**
- * Shift register r right into carry. MSB set to 0
+ * Rotate (hl) left
+ * 
+ * 4 machine cycles
  */
-static void srl_r(uint8_t *r) {
-    FLAGS_RESET();
+static uint8_t rlc_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+    r = rlc_helper(gb, r);
 
-    if (!!(*(r) & 0x1)) {
-        C_SET();
-    }
+    mem_write_byte(gb, gb->cpu.hl, r);
 
-    *(r) = *(r) >> 1;
-
-    zero_check(*(r));
-
-    cpu_cycles += 8;
+    return 4;
 }
 
 /**
- * Shift value at hl right into carry. MSB set to 0
+ * Rotate (hl) left through carry
+ * 
+ * 4 machine cycles
  */
-static void srl_ahl() {
-    uint8_t val = mem_read_byte(HL_R());
-    srl_r(&val);
-    mem_write_byte(HL_R(), val);
-    cpu_cycles += 8;
+static uint8_t rl_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+    r = rl_helper(gb, r);
+
+    mem_write_byte(gb, gb->cpu.hl, r);
+
+    return 4;
 }
 
 /**
- * Swap the two nibbles of r
+ * Rotate (hl) right
+ * 
+ * 4 machine cycles
  */
-static void swap(uint8_t *r) {
-    *(r) = ((*(r) & 0xF) << 4) | ((*(r) & 0xF0) >> 4);
-    cpu_cycles += 8;
+static uint8_t rrc_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+    r = rrc_helper(gb, r);
+
+    mem_write_byte(gb, gb->cpu.hl, r);
+
+    return 4;
 }
 
 /**
- * Swap the two nibbles of memory (hl)
+ * Rotate (hl) right through carry
+ * 
+ * 4 machine cycles
  */
-static void swap_ahl() {
-    uint8_t val = mem_read_byte(HL_R());
-    swap(&val);
-    mem_write_byte(HL_R(), val);
-    cpu_cycles += 8;
+static uint8_t rr_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+    r = rr_helper(gb, r);
+
+    mem_write_byte(gb, gb->cpu.hl, r);
+
+    return 4;
 }
 
-#define RLCA() rlcr(&a)
-#define RLA() rlr(&a)
-#define RRCA() rrcr(&a)
-#define RRA() rrr(&a)
+/**
+ * Shift left arithmetic r
+ * 
+ * 2 machine cycles
+ */
+static uint8_t sla_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
 
-#define RLC_A() rlcr(&a); cpu_cycles += 4
-#define RLC_B() rlcr(&b); cpu_cycles += 4
-#define RLC_C() rlcr(&c); cpu_cycles += 4
-#define RLC_D() rlcr(&d); cpu_cycles += 4
-#define RLC_E() rlcr(&e); cpu_cycles += 4
-#define RLC_H() rlcr(&h); cpu_cycles += 4
-#define RLC_L() rlcr(&l); cpu_cycles += 4
+    gb->cpu.f = 0;
+    gb->cpu.flag_c = !!(*r & 0x80);
 
-#define RL_A() rlr(&a); cpu_cycles += 4
-#define RL_B() rlr(&b); cpu_cycles += 4
-#define RL_C() rlr(&c); cpu_cycles += 4
-#define RL_D() rlr(&d); cpu_cycles += 4
-#define RL_E() rlr(&e); cpu_cycles += 4
-#define RL_H() rlr(&h); cpu_cycles += 4
-#define RL_L() rlr(&l); cpu_cycles += 4
+    *r = (*r << 1) & 0xFF;
 
-#define RRC_A() rrcr(&a); cpu_cycles += 4
-#define RRC_B() rrcr(&b); cpu_cycles += 4
-#define RRC_C() rrcr(&c); cpu_cycles += 4
-#define RRC_D() rrcr(&d); cpu_cycles += 4
-#define RRC_E() rrcr(&e); cpu_cycles += 4
-#define RRC_H() rrcr(&h); cpu_cycles += 4
-#define RRC_L() rrcr(&l); cpu_cycles += 4
+    zero_check(gb, *r);
 
-#define RR_A() rrr(&a); cpu_cycles += 4
-#define RR_B() rrr(&b); cpu_cycles += 4
-#define RR_C() rrr(&c); cpu_cycles += 4
-#define RR_D() rrr(&d); cpu_cycles += 4
-#define RR_E() rrr(&e); cpu_cycles += 4
-#define RR_H() rrr(&h); cpu_cycles += 4
-#define RR_L() rrr(&l); cpu_cycles += 4
+    return 2;
+}
 
-#define RLC_AHL() rlc_ahl()
-#define RL_AHL() rl_ahl()
-#define RRC_AHL() rrc_ahl()
-#define RR_AHL() rr_ahl()
+/**
+ * Shift left arithmetic (hl)
+ * 
+ * 4 machine cycles
+ */
+static uint8_t sla_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
 
-#define SLA_A() sla_r(&a); cpu_cycles += 4
-#define SLA_B() sla_r(&b); cpu_cycles += 4
-#define SLA_C() sla_r(&c); cpu_cycles += 4
-#define SLA_D() sla_r(&d); cpu_cycles += 4
-#define SLA_E() sla_r(&e); cpu_cycles += 4
-#define SLA_H() sla_r(&h); cpu_cycles += 4
-#define SLA_L() sla_r(&l); cpu_cycles += 4
+    gb->cpu.f = 0;
+    gb->cpu.flag_c = !!(r & 0x80);
 
-#define SRA_A() sra_r(&a); cpu_cycles += 4
-#define SRA_B() sra_r(&b); cpu_cycles += 4
-#define SRA_C() sra_r(&c); cpu_cycles += 4
-#define SRA_D() sra_r(&d); cpu_cycles += 4
-#define SRA_E() sra_r(&e); cpu_cycles += 4
-#define SRA_H() sra_r(&h); cpu_cycles += 4
-#define SRA_L() sra_r(&l); cpu_cycles += 4
+    r = (r << 1) & 0xFF;
 
-#define SRL_A() srl_r(&a); cpu_cycles += 4
-#define SRL_B() srl_r(&b); cpu_cycles += 4
-#define SRL_C() srl_r(&c); cpu_cycles += 4
-#define SRL_D() srl_r(&d); cpu_cycles += 4
-#define SRL_E() srl_r(&e); cpu_cycles += 4
-#define SRL_H() srl_r(&h); cpu_cycles += 4
-#define SRL_L() srl_r(&l); cpu_cycles += 4
+    zero_check(gb, r);
 
-#define SLA_AHL() sla_hl()
-#define SRA_AHL() sra_hl()
-#define SRL_AHL() srl_hl()
+    mem_write_byte(gb, gb->cpu.hl, r);
 
-#define SWAP_A() swap(&a);
-#define SWAP_B() swap(&b);
-#define SWAP_C() swap(&c);
-#define SWAP_D() swap(&d);
-#define SWAP_E() swap(&e);
-#define SWAP_H() swap(&h);
-#define SWAP_L() swap(&l);
-#define SWAP_AHL() swap_ahl();
+    return 4;
+}
+
+/**
+ * Shift right arithmetic r
+ * 
+ * 2 machine cycles
+ */
+static uint8_t sra_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+
+    gb->cpu.f = 0;
+    gb->cpu.flag_c = !!(*r & 0x1);
+
+    *r = *r >> 1 | (*r & 0x80);
+
+    zero_check(gb, *r);
+
+    return 2;
+}
+
+/**
+ * Shift right arithmetic (hl)
+ * 
+ * 4 machine cycles
+ */
+static uint8_t sra_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+
+    gb->cpu.f = 0;
+    gb->cpu.flag_c = !!(r & 0x1);
+
+    r = r >> 1 | (r & 0x80);
+
+    zero_check(gb, r);
+
+    mem_write_byte(gb, gb->cpu.hl, r);
+
+    return 4;
+}
+
+/**
+ * Shift right logical r
+ * 
+ * 2 machine cycles
+ */
+static uint8_t srl_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+
+    gb->cpu.f = 0;
+    gb->cpu.flag_c = !!(*r & 0x1);
+
+    *r = *r >> 1;
+
+    zero_check(gb, *r);
+
+    return 2;
+}
+
+/**
+ * Shift right logical (hl)
+ * 
+ * 4 machine cycles
+ */
+static uint8_t srl_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+
+    gb->cpu.f = 0;
+    gb->cpu.flag_c = !!(r & 0x1);
+
+    r = r >> 1;
+
+    zero_check(gb, r);
+
+    mem_write_byte(gb, gb->cpu.hl, r);
+
+    return 4;
+}
+
+/**
+ * Swap high and low nibbles of r
+ * 
+ * 2 machine cycles
+ */
+static uint8_t swap_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+    *r = ((*r & 0xF) << 4) | ((*r & 0xF0) >> 4);
+
+    return 2;
+}
+
+/**
+ * Swap high and low nibbles of (hl)
+ * 
+ * 4 machine cycles
+ */
+static uint8_t swap_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+    r = ((r & 0xF) << 4) | ((r & 0xF0) >> 4);
+
+    mem_write_byte(gb, gb->cpu.hl, r);
+
+    return 4;
+}
 
 // Bit operations
 
 /**
- * Copies the compliment of the contents of bit b in r to z flag
+ * Test bit n in r
+ * 2 machine cycles
  */
-static void bit(uint8_t b, uint8_t *r) {
-    H_SET();
-    N_RESET();
+static uint8_t bit_n_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+    uint8_t b = OPCODE_PARAM_HIGH(opcode);
 
-    Z_RESET();
+    gb->cpu.f = 0;
+    gb->cpu.flag_h = 1;
+    gb->cpu.flag_z = !(*r & (1 << b));
 
-    if (!(*(r) & (1 << b))) {
-        Z_SET();
-    }
-
-    cpu_cycles += 8;
+    return 2;
 }
 
 /**
- * Copies the compliment of the contents of bit b in (hl) to z flag
+ * Test bit n in (hl)
+ * 3 machine cycles
  */
-static void bit_ahl(uint8_t b) {
-    uint8_t val = mem_read_byte(HL_R());
-    bit(b, &val);
+static uint8_t bit_n_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+    uint8_t b = OPCODE_PARAM_HIGH(opcode);
 
-    cpu_cycles += 8;
+    gb->cpu.f = 0;
+    gb->cpu.flag_h = 1;
+    gb->cpu.flag_z = !(r & (1 << b));
+
+    return 3;
 }
 
 /**
- * Set bit b to 1 in r
+ * Set bit n in r
+ * 2 machine cycles
  */
-static void set(uint8_t b, uint8_t *r) {
-    *(r) = *(r) | (1 << b);
-    cpu_cycles += 8;
+static uint8_t set_n_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+    uint8_t b = OPCODE_PARAM_HIGH(opcode);
+
+    *r |= (1 << b);
+
+    return 2;
 }
 
 /**
- * Set bit b to 1 in (hl)
+ * Set bit n in (hl)
+ * 3 machine cycles
  */
-static void set_ahl(uint8_t b) {
-    uint8_t val = mem_read_byte(HL_R());
-    set(b, &val);
+static uint8_t set_n_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+    uint8_t b = OPCODE_PARAM_HIGH(opcode);
 
-    cpu_cycles += 8;
+    r |= (1 << b);
+    
+    mem_write_byte(gb, gb->cpu.hl, r);
+
+    return 3;
 }
 
 /**
- * Reset bit b to 0 in r
+ * Reset bit n in r
+ * 2 machine cycles
  */
-static void res(uint8_t b, uint8_t *r) {
-    *(r) = *(r) & ~(1 << b);
-    cpu_cycles += 8;
+static uint8_t res_n_r(gb_t *gb, uint8_t opcode) {
+    uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
+    uint8_t b = OPCODE_PARAM_HIGH(opcode);
+
+    *r &= ~(1 << b);
+
+    return 2;
 }
 
 /**
- * Reset bit b to 0 in (hl)
+ * Reset bit n in (hl)
+ * 3 machine cycles
  */
-static void res_ahl(uint8_t b) {
-    uint8_t val = mem_read_byte(HL_R());
-    res(b, &val);
+static uint8_t res_n_mhl(gb_t *gb, uint8_t opcode) {
+    uint8_t r = mem_read_byte(gb, gb->cpu.hl);
+    uint8_t b = OPCODE_PARAM_HIGH(opcode);
 
-    cpu_cycles += 8;
+    r &= ~(1 << b);
+    
+    mem_write_byte(gb, gb->cpu.hl, r);
+
+    return 3;
 }
 
-#define BIT_0_A() bit(0, &a)
-#define BIT_1_A() bit(1, &a)
-#define BIT_2_A() bit(2, &a)
-#define BIT_3_A() bit(3, &a)
-#define BIT_4_A() bit(4, &a)
-#define BIT_5_A() bit(5, &a)
-#define BIT_6_A() bit(6, &a)
-#define BIT_7_A() bit(7, &a)
-#define BIT_0_B() bit(0, &b)
-#define BIT_1_B() bit(1, &b)
-#define BIT_2_B() bit(2, &b)
-#define BIT_3_B() bit(3, &b)
-#define BIT_4_B() bit(4, &b)
-#define BIT_5_B() bit(5, &b)
-#define BIT_6_B() bit(6, &b)
-#define BIT_7_B() bit(7, &b)
-#define BIT_0_C() bit(0, &c)
-#define BIT_1_C() bit(1, &c)
-#define BIT_2_C() bit(2, &c)
-#define BIT_3_C() bit(3, &c)
-#define BIT_4_C() bit(4, &c)
-#define BIT_5_C() bit(5, &c)
-#define BIT_6_C() bit(6, &c)
-#define BIT_7_C() bit(7, &c)
-#define BIT_0_D() bit(0, &d)
-#define BIT_1_D() bit(1, &d)
-#define BIT_2_D() bit(2, &d)
-#define BIT_3_D() bit(3, &d)
-#define BIT_4_D() bit(4, &d)
-#define BIT_5_D() bit(5, &d)
-#define BIT_6_D() bit(6, &d)
-#define BIT_7_D() bit(7, &d)
-#define BIT_0_E() bit(0, &e)
-#define BIT_1_E() bit(1, &e)
-#define BIT_2_E() bit(2, &e)
-#define BIT_3_E() bit(3, &e)
-#define BIT_4_E() bit(4, &e)
-#define BIT_5_E() bit(5, &e)
-#define BIT_6_E() bit(6, &e)
-#define BIT_7_E() bit(7, &e)
-#define BIT_0_H() bit(0, &h)
-#define BIT_1_H() bit(1, &h)
-#define BIT_2_H() bit(2, &h)
-#define BIT_3_H() bit(3, &h)
-#define BIT_4_H() bit(4, &h)
-#define BIT_5_H() bit(5, &h)
-#define BIT_6_H() bit(6, &h)
-#define BIT_7_H() bit(7, &h)
-#define BIT_0_L() bit(0, &l)
-#define BIT_1_L() bit(1, &l)
-#define BIT_2_L() bit(2, &l)
-#define BIT_3_L() bit(3, &l)
-#define BIT_4_L() bit(4, &l)
-#define BIT_5_L() bit(5, &l)
-#define BIT_6_L() bit(6, &l)
-#define BIT_7_L() bit(7, &l)
-#define BIT_0_AHL() bit_ahl(0)
-#define BIT_1_AHL() bit_ahl(1)
-#define BIT_2_AHL() bit_ahl(2)
-#define BIT_3_AHL() bit_ahl(3)
-#define BIT_4_AHL() bit_ahl(4)
-#define BIT_5_AHL() bit_ahl(5)
-#define BIT_6_AHL() bit_ahl(6)
-#define BIT_7_AHL() bit_ahl(7)
-
-#define SET_0_A() set(0, &a)
-#define SET_1_A() set(1, &a)
-#define SET_2_A() set(2, &a)
-#define SET_3_A() set(3, &a)
-#define SET_4_A() set(4, &a)
-#define SET_5_A() set(5, &a)
-#define SET_6_A() set(6, &a)
-#define SET_7_A() set(7, &a)
-#define SET_0_B() set(0, &b)
-#define SET_1_B() set(1, &b)
-#define SET_2_B() set(2, &b)
-#define SET_3_B() set(3, &b)
-#define SET_4_B() set(4, &b)
-#define SET_5_B() set(5, &b)
-#define SET_6_B() set(6, &b)
-#define SET_7_B() set(7, &b)
-#define SET_0_C() set(0, &c)
-#define SET_1_C() set(1, &c)
-#define SET_2_C() set(2, &c)
-#define SET_3_C() set(3, &c)
-#define SET_4_C() set(4, &c)
-#define SET_5_C() set(5, &c)
-#define SET_6_C() set(6, &c)
-#define SET_7_C() set(7, &c)
-#define SET_0_D() set(0, &d)
-#define SET_1_D() set(1, &d)
-#define SET_2_D() set(2, &d)
-#define SET_3_D() set(3, &d)
-#define SET_4_D() set(4, &d)
-#define SET_5_D() set(5, &d)
-#define SET_6_D() set(6, &d)
-#define SET_7_D() set(7, &d)
-#define SET_0_E() set(0, &e)
-#define SET_1_E() set(1, &e)
-#define SET_2_E() set(2, &e)
-#define SET_3_E() set(3, &e)
-#define SET_4_E() set(4, &e)
-#define SET_5_E() set(5, &e)
-#define SET_6_E() set(6, &e)
-#define SET_7_E() set(7, &e)
-#define SET_0_H() set(0, &h)
-#define SET_1_H() set(1, &h)
-#define SET_2_H() set(2, &h)
-#define SET_3_H() set(3, &h)
-#define SET_4_H() set(4, &h)
-#define SET_5_H() set(5, &h)
-#define SET_6_H() set(6, &h)
-#define SET_7_H() set(7, &h)
-#define SET_0_L() set(0, &l)
-#define SET_1_L() set(1, &l)
-#define SET_2_L() set(2, &l)
-#define SET_3_L() set(3, &l)
-#define SET_4_L() set(4, &l)
-#define SET_5_L() set(5, &l)
-#define SET_6_L() set(6, &l)
-#define SET_7_L() set(7, &l)
-#define SET_0_AHL() set_ahl(0)
-#define SET_1_AHL() set_ahl(1)
-#define SET_2_AHL() set_ahl(2)
-#define SET_3_AHL() set_ahl(3)
-#define SET_4_AHL() set_ahl(4)
-#define SET_5_AHL() set_ahl(5)
-#define SET_6_AHL() set_ahl(6)
-#define SET_7_AHL() set_ahl(7)
-
-#define RES_0_A() res(0, &a)
-#define RES_1_A() res(1, &a)
-#define RES_2_A() res(2, &a)
-#define RES_3_A() res(3, &a)
-#define RES_4_A() res(4, &a)
-#define RES_5_A() res(5, &a)
-#define RES_6_A() res(6, &a)
-#define RES_7_A() res(7, &a)
-#define RES_0_B() res(0, &b)
-#define RES_1_B() res(1, &b)
-#define RES_2_B() res(2, &b)
-#define RES_3_B() res(3, &b)
-#define RES_4_B() res(4, &b)
-#define RES_5_B() res(5, &b)
-#define RES_6_B() res(6, &b)
-#define RES_7_B() res(7, &b)
-#define RES_0_C() res(0, &c)
-#define RES_1_C() res(1, &c)
-#define RES_2_C() res(2, &c)
-#define RES_3_C() res(3, &c)
-#define RES_4_C() res(4, &c)
-#define RES_5_C() res(5, &c)
-#define RES_6_C() res(6, &c)
-#define RES_7_C() res(7, &c)
-#define RES_0_D() res(0, &d)
-#define RES_1_D() res(1, &d)
-#define RES_2_D() res(2, &d)
-#define RES_3_D() res(3, &d)
-#define RES_4_D() res(4, &d)
-#define RES_5_D() res(5, &d)
-#define RES_6_D() res(6, &d)
-#define RES_7_D() res(7, &d)
-#define RES_0_E() res(0, &e)
-#define RES_1_E() res(1, &e)
-#define RES_2_E() res(2, &e)
-#define RES_3_E() res(3, &e)
-#define RES_4_E() res(4, &e)
-#define RES_5_E() res(5, &e)
-#define RES_6_E() res(6, &e)
-#define RES_7_E() res(7, &e)
-#define RES_0_H() res(0, &h)
-#define RES_1_H() res(1, &h)
-#define RES_2_H() res(2, &h)
-#define RES_3_H() res(3, &h)
-#define RES_4_H() res(4, &h)
-#define RES_5_H() res(5, &h)
-#define RES_6_H() res(6, &h)
-#define RES_7_H() res(7, &h)
-#define RES_0_L() res(0, &l)
-#define RES_1_L() res(1, &l)
-#define RES_2_L() res(2, &l)
-#define RES_3_L() res(3, &l)
-#define RES_4_L() res(4, &l)
-#define RES_5_L() res(5, &l)
-#define RES_6_L() res(6, &l)
-#define RES_7_L() res(7, &l)
-#define RES_0_AHL() res_ahl(0)
-#define RES_1_AHL() res_ahl(1)
-#define RES_2_AHL() res_ahl(2)
-#define RES_3_AHL() res_ahl(3)
-#define RES_4_AHL() res_ahl(4)
-#define RES_5_AHL() res_ahl(5)
-#define RES_6_AHL() res_ahl(6)
-#define RES_7_AHL() res_ahl(7)
-
-// Jump
+// CPU control instructions
 
 /**
- * Jump to address nn
+ * Compliment the carry flag
+ * 
+ * 1 machine cycle
  */
-static void jump(uint16_t nn) {
-    pc = nn;
-    cpu_cycles += 12;
+static uint8_t ccf(gb_t *gb, uint8_t opcode) {
+    gb->cpu.flag_c ^= 1;
+
+    return 1;
 }
 
 /**
- * Jump if z is reset
+ * Set the carry flag
+ * 
+ * 1 machine cycle
  */
-static void jump_nz(uint16_t nn) {
-    if (!FLAG_Z) {
-        pc = nn;
-    }
+static uint8_t scf(gb_t *gb, uint8_t opcode) {
+    gb->cpu.flag_c = 1;
 
-    cpu_cycles += 12;
-}
-
-/**
- * Jump if z is set
- */
-static void jump_z(uint16_t nn) {
-    if (FLAG_Z) {
-        pc = nn;
-    }
-
-    cpu_cycles += 12;
-}
-
-/**
- * Jump if c is reset
- */
-static void jump_nc(uint16_t nn) {
-    if (!FLAG_C) {
-        pc = nn;
-    }
-
-    cpu_cycles += 12;
-}
-
-/**
- * Jump if c is set
- */
-static void jump_c(uint16_t nn) {
-    if (FLAG_C) {
-        pc = nn;
-    }
-
-    cpu_cycles += 12;
-}
-
-/**
- * Jump to pc + e
- */
-static void jump_e(int8_t e) {
-    pc += e;
-    cpu_cycles += 8;
-}
-
-/**
- * Jump to pc + e if z is reset
- */
-static void jump_e_nz(int8_t e) {
-    if (!FLAG_Z) {
-        pc += e;
-    }
-
-    cpu_cycles += 8;
-}
-
-/**
- * Jump to pc + e if z is set
- */
-static void jump_e_z(int8_t e) {
-    if (FLAG_Z) {
-        pc += e;
-    }
-
-    cpu_cycles += 8;
-}
-
-/**
- * Jump to pc + e if c is reset
- */
-static void jump_e_nc(int8_t e) {
-    if (!FLAG_C) {
-        pc += e;
-    }
-
-    cpu_cycles += 8;
-}
-
-/**
- * Jump to pc + e if c is set
- */
-static void jump_e_c(int8_t e) {
-    if (FLAG_C) {
-        pc += e;
-    }
-
-    cpu_cycles += 8;
-}
-
-/**
- * Jump to address in hl
- */
-static void jump_hl() {
-    pc = HL_R();
-    cpu_cycles += 4;
-}
-
-#define JP() jump(uarg16())
-
-#define JP_NZ() jump_nz(uarg16())
-#define JP_Z() jump_z(uarg16())
-#define JP_NC() jump_nc(uarg16())
-#define JP_C() jump_c(uarg16())
-
-#define JP_HL() jump_hl()
-#define JR() jump_e(arg8())
-
-#define JR_NZ() jump_e_nz(arg8())
-#define JR_Z() jump_e_z(arg8())
-#define JR_NC() jump_e_nc(arg8())
-#define JR_C() jump_e_c(arg8())
-
-// Call and return
-
-/**
- * Push address of next instruction to the stack and jump to nn
- */
-static void call(uint16_t nn) {
-    sp--;
-    mem_write_byte(sp, pc >> 8);
-    sp--;
-    mem_write_byte(sp, pc & 0xFF);
-
-    pc = nn;
-
-    cpu_cycles += 12;
-}
-
-/**
- * Call address nn if z is reset
- */
-static void call_nz(uint16_t nn) {
-    if (!FLAG_Z) {
-        call(nn);
-    } else {
-        cpu_cycles += 12;
-    }
-}
-
-/**
- * Call address nn if z is set
- */
-static void call_z(uint16_t nn) {
-    if (FLAG_Z) {
-        call(nn);
-    } else {
-        cpu_cycles += 12;
-    }
-}
-
-/**
- * Call address nn if c is reset
- */
-static void call_nc(uint16_t nn) {
-    if (!FLAG_C) {
-        call(nn);
-    } else {
-        cpu_cycles += 12;
-    }
-}
-
-/**
- * Call address nn if c is set
- */
-static void call_c(uint16_t nn) {
-    if (FLAG_C) {
-        call(nn);
-    } else {
-        cpu_cycles += 12;
-    }
-}
-
-/**
- * Restart - push pc to stack and jump to 0 + n
- */
-static void rst(uint8_t n) {
-    call(n);
-    cpu_cycles += 20;
-}
-
-/**
- * Return to address on stack
- */
-static void ret() {
-    pc = mem_read_byte(sp);
-    sp++;
-    pc |= mem_read_byte(sp) << 8;
-    sp++;
-
-    cpu_cycles += 8;
-}
-
-/**
- * Return if z is reset
- */
-static void ret_nz() {
-    if (!FLAG_Z) {
-        ret();
-    } else {
-        cpu_cycles += 8;
-    }
-}
-
-/**
- * Return if z is set
- */
-static void ret_z() {
-    if (FLAG_Z) {
-        ret();
-    } else {
-        cpu_cycles += 8;
-    }
-}
-
-/**
- * Return if c is reset
- */
-static void ret_nc() {
-    if (!FLAG_C) {
-        ret();
-    } else {
-        cpu_cycles += 8;
-    }
-}
-
-/**
- * Return if c is set
- */
-static void ret_c() {
-    if (FLAG_C) {
-        ret();
-    } else {
-        cpu_cycles += 8;
-    }
-}
-
-/**
- * Return & enable interrupts
- */
-static void reti() {
-    ret();
-    get_gb_instance()->interrupts_enabled = 1;
-}
-
-#define CALL() call(uarg16())
-
-#define CALL_NZ() call_nz(uarg16())
-#define CALL_Z() call_z(uarg16())
-#define CALL_NC() call_nc(uarg16())
-#define CALL_C() call_c(uarg16())
-
-#define RST_0() rst(0x00)
-#define RST_1() rst(0x08)
-#define RST_2() rst(0x10)
-#define RST_3() rst(0x18)
-#define RST_4() rst(0x20)
-#define RST_5() rst(0x28)
-#define RST_6() rst(0x30)
-#define RST_7() rst(0x38)
-
-#define RET() ret()
-#define RET_NZ() ret_nz()
-#define RET_Z() ret_z()
-#define RET_NC() ret_nc()
-#define RET_C() ret_c()
-
-#define RETI() reti()
-
-#define DI() get_gb_instance()->interrupts_enabled = 0; cpu_cycles += 4
-#define EI() get_gb_instance()->interrupts_enabled = 1; cpu_cycles += 4
-
-// General-purpose Arithmetic Operations and CPU Control
-
-/**
- * Decimal adjust acc
- */
-static void daa() {
-
-}
-
-/**
- * One's compliment of A
- */
-static void cpl() {
-    a = ~a;
-    cpu_cycles += 4;
-}
-
-/**
- * Compliment carry flag
- */
-static void ccf() {
-    if (FLAG_C) {
-        C_RESET();
-    } else {
-        C_SET();
-    }
+    return 1;
 }
 
 /**
  * No operation
+ *
+ * 1 machine cycle
  */
-static void nop() {
-    cpu_cycles += 4;
+static uint8_t nop(gb_t *gb, uint8_t opcode) {
+    return 1;
 }
 
 /**
- * Halt. Wait until interrupt occurs
+ * Halt until interrupt
  */
-static void halt() {
-    // TODO: what to do here
-}
-
-/**
- * Stop. halt cpu & lcd until button press
- */
-static void stop() {
+static uint8_t halt(gb_t *gb, uint8_t opcode) {
     // TODO
+    return 1;
 }
 
-#define DAA() daa()
-#define CPL() cpl()
-#define CCF() ccf()
-#define SCF() C_SET()
-
-#define NOP() nop()
-#define HALT() halt()
-#define STOP() stop()
-
-/* END INSTRUCTIONS */
-
-void cpu_init() {
-    a = 0;
-    b = 0;
-    c = 0;
-    d = 0;
-    e = 0;
-    f = 0;
-    l = 0;
-    h = 0;
-
-    sp = 0xFFFE;
-    pc = 0x0;
-
-    printf("CPU init\r\n");
+/**
+ * Stop
+ */
+static uint8_t stop(gb_t *gb, uint8_t opcode) {
+    // TODO
+    return 1;
 }
 
-int cpu_tick() {
-    // Opcode
-    uint8_t opcode = mem_read_byte(pc++);
-
-    #if OPCODE_DEBUG
-        if (!get_gb_instance()->in_bios) printf("OP: %X pc: %X\r\n", opcode, pc - 1);
-    #endif
-
-    // Instruction decoding
-    switch (opcode) {
-        /* --- 0x0+ --- */
-        case 0x00:
-            NOP();
-            break;
-
-        case 0x01:
-            LD_BC_NN();
-            break;
-
-        case 0x02:
-            LD_ABC_A();
-            break;
-
-        case 0x03:
-            INC_BC();
-            break;
-        
-        case 0x04:
-            INC_B();
-            break;
-
-        case 0x05:
-            DEC_B();
-            break;
-
-        case 0x06:
-            LD_B_N();
-            break;
-
-        case 0x07:
-            RLCA();
-            break;
-
-        case 0x08:
-            LD_ANN_SP();
-            break;
-
-        case 0x09:
-            ADD_HL_BC();
-            break;
-
-        case 0x0A:
-            LD_A_ABC();
-            break;
-        
-        case 0x0B:
-            DEC_BC();
-            break;
-
-        case 0x0C:
-            INC_C();
-            break;
-
-        case 0x0D:
-            DEC_C();
-            break;
-
-        case 0x0E:
-            LD_C_N();
-            break;
-
-        case 0x0F:
-            RRCA();
-            break;
-
-        /* --- 0x1+ --- */
-
-        case 0x10:
-            STOP();
-            break;
-
-        case 0x11:
-            LD_DE_NN();
-            break;
-
-        case 0x12:
-            LD_ADE_A();
-            break;
-
-        case 0x13:
-            INC_DE();
-            break;
-
-        case 0x14:
-            INC_D();
-            break;
-
-        case 0x15:
-            DEC_D();
-            break;
-
-        case 0x16:
-            LD_D_N();
-            break;
-
-        case 0x17:
-            RLA();
-            break;
-
-        case 0x18:
-            JR();
-            break;
-
-        case 0x19:
-            ADD_HL_DE();
-            break;
-
-        case 0x1A:
-            LD_A_ADE();
-            break;
-
-        case 0x1B:
-            DEC_DE();
-            break;
-
-        case 0x1C:
-            INC_E();
-            break;
-
-        case 0x1D:
-            DEC_E();
-            break;
-
-        case 0x1E:
-            LD_E_N();
-            break;
-
-        case 0x1F:
-            RRA();
-            break;
-
-        /* --- 0x2+ --- */
-        case 0x20:
-            JR_NZ();
-            break;
-
-        case 0x21:
-            LD_HL_NN();
-            break;
-
-        case 0x22:
-            LD_AHLI_A();
-            break;
-
-        case 0x23:
-            INC_HL();
-            break;
-
-        case 0x24:
-            INC_H();
-            break;
-
-        case 0x25:
-            DEC_H();
-            break;
-
-        case 0x26:
-            LD_H_N();
-            break;
-
-        case 0x27:
-            DAA();
-            break;
-
-        case 0x28:
-            JR_Z();
-            break;
-
-        case 0x29:
-            ADD_HL_HL();
-            break;
-
-        case 0x2A:
-            LD_A_AHLI();
-            break;
-
-        case 0x2B:
-            DEC_HL();
-            break;
-
-        case 0x2C:
-            INC_L();
-            break;
-
-        case 0x2D:
-            DEC_L();
-            break;
-
-        case 0x2E:
-            LD_L_N();
-            break;
-
-        case 0x2F:
-            CPL();
-            break;
-
-        /* --- 0x3+ --- */
-        case 0x30:
-            JR_NC();
-            break;
-
-        case 0x31:
-            LD_SP_NN();
-            break;
-
-        case 0x32:
-            LD_AHLD_A();
-            break;
-
-        case 0x33:
-            INC_SP();
-            break;
-
-        case 0x34:
-            INC_AHL();
-            break;
-
-        case 0x35:
-            DEC_AHL();
-            break;
-
-        case 0x36:
-            LD_AHL_N();
-            break;
-
-        case 0x37:
-            SCF();
-            break;
-
-        case 0x38:
-            JR_C();
-            break;
-
-        case 0x39:
-            ADD_HL_SP();
-            break;
-
-        case 0x3A:
-            LD_A_AHLD();
-            break;
-
-        case 0x3B:
-            DEC_SP();
-            break;
-
-        case 0x3C:
-            INC_A();
-            break;
-
-        case 0x3D:
-            DEC_A();
-            break;
-
-        case 0x3E:
-            LD_A_N();
-            break;
-
-        case 0x3F:
-            CCF();
-            break;
-
-        /* --- 0x4+ --- */
-        case 0x40:
-            LD_B_B();
-            break;
-
-        case 0x41:
-            LD_B_C();
-            break;
-
-        case 0x42:
-            LD_B_D();
-            break;
-
-        case 0x43:
-            LD_B_E();
-            break;
-
-        case 0x44:
-            LD_B_H();
-            break;
-
-        case 0x45:
-            LD_B_L();
-            break;
-
-        case 0x46:
-            LD_B_AHL();
-            break;
-
-        case 0x47:
-            LD_B_A();
-            break;
-
-        case 0x48:
-            LD_C_B();
-            break;
-
-        case 0x49:
-            LD_C_C();
-            break;
-
-        case 0x4A:
-            LD_C_D();
-            break;
-
-        case 0x4B:
-            LD_C_E();
-            break;
-
-        case 0x4C:
-            LD_C_H();
-            break;
-
-        case 0x4D:
-            LD_C_L();
-            break;
-
-        case 0x4E:
-            LD_C_AHL();
-            break;
-
-        case 0x4F:
-            LD_C_A();
-            break;
-
-        /* --- 0x5+ --- */
-        case 0x50:
-            LD_D_B();
-            break;
-
-        case 0x51:
-            LD_D_C();
-            break;
-
-        case 0x52:
-            LD_D_D();
-            break;
-
-        case 0x53:
-            LD_D_E();
-            break;
-
-        case 0x54:
-            LD_D_H();
-            break;
-
-        case 0x55:
-            LD_D_L();
-            break;
-
-        case 0x56:
-            LD_D_AHL();
-            break;
-
-        case 0x57:
-            LD_D_A();
-            break;
-
-        case 0x58:
-            LD_E_B();
-            break;
-
-        case 0x59:
-            LD_E_C();
-            break;
-
-        case 0x5A:
-            LD_E_D();
-            break;
-
-        case 0x5B:
-            LD_E_E();
-            break;
-
-        case 0x5C:
-            LD_E_H();
-            break;
-
-        case 0x5D:
-            LD_E_L();
-            break;
-
-        case 0x5E:
-            LD_E_AHL();
-            break;
-
-        case 0x5F:
-            LD_E_A();
-            break;
-
-        /* --- 0x6+ --- */
-        case 0x60:
-            LD_H_B();
-            break;
-
-        case 0x61:
-            LD_H_C();
-            break;
-
-        case 0x62:
-            LD_H_D();
-            break;
-
-        case 0x63:
-            LD_H_E();
-            break;
-
-        case 0x64:
-            LD_H_H();
-            break;
-
-        case 0x65:
-            LD_H_L();
-            break;
-
-        case 0x66:
-            LD_H_AHL();
-            break;
-
-        case 0x67:
-            LD_H_A();
-            break;
-
-        case 0x68:
-            LD_L_B();
-            break;
-
-        case 0x69:
-            LD_L_C();
-            break;
-
-        case 0x6A:
-            LD_L_D();
-            break;
-
-        case 0x6B:
-            LD_L_E();
-            break;
-
-        case 0x6C:
-            LD_L_H();
-            break;
-
-        case 0x6D:
-            LD_L_L();
-            break;
-
-        case 0x6E:
-            LD_L_AHL();
-            break;
-
-        case 0x6F:
-            LD_L_A();
-            break;
-
-        /* --- 0x7+ --- */
-        case 0x70:
-            LD_AHL_B();
-            break;
-
-        case 0x71:
-            LD_AHL_C();
-            break;
-
-        case 0x72:
-            LD_AHL_D();
-            break;
-
-        case 0x73:
-            LD_AHL_E();
-            break;
-
-        case 0x74:
-            LD_AHL_H();
-            break;
-
-        case 0x75:
-            LD_AHL_L();
-            break;
-
-        case 0x76:
-            HALT();
-            break;
-
-        case 0x77:
-            LD_AHL_A();
-            break;
-
-        case 0x78:
-            LD_A_B();
-            break;
-
-        case 0x79:
-            LD_A_C();
-            break;
-
-        case 0x7A:
-            LD_A_D();
-            break;
-
-        case 0x7B:
-            LD_A_E();
-            break;
-
-        case 0x7C:
-            LD_A_H();
-            break;
-
-        case 0x7D:
-            LD_A_L();
-            break;
-
-        case 0x7E:
-            LD_A_AHL();
-            break;
-
-        case 0x7F:
-            LD_A_A();
-            break;
-
-        /* --- 0x8+ --- */
-        case 0x80:
-            ADD_A_B();
-            break;
-
-        case 0x81:
-            ADD_A_C();
-            break;
-
-        case 0x82:
-            ADD_A_D();
-            break;
-
-        case 0x83:
-            ADD_A_E();
-            break;
-
-        case 0x84:
-            ADD_A_H();
-            break;
-
-        case 0x85:
-            ADD_A_L();
-            break;
-
-        case 0x86:
-            ADD_A_AHL();
-            break;
-        
-        case 0x87:
-            ADD_A_A();
-            break;
-
-        case 0x88:
-            ADC_A_B();
-            break;
-
-        case 0x89:
-            ADC_A_C();
-            break;
-
-        case 0x8A:
-            ADC_A_D();
-            break;
-
-        case 0x8B:
-            ADC_A_E();
-            break;
-
-        case 0x8C:
-            ADC_A_H();
-            break;
-
-        case 0x8D:
-            ADC_A_L();
-            break;
-
-        case 0x8E:
-            ADC_A_AHL();
-            break;
-
-        case 0x8F:
-            ADC_A_A();
-            break;
-
-        /* --- 0x9+ --- */
-        case 0x90:
-            SUB_A_B();
-            break;
-
-        case 0x91:
-            SUB_A_C();
-            break;
-
-        case 0x92:
-            SUB_A_D();
-            break;
-
-        case 0x93:
-            SUB_A_E();
-            break;
-
-        case 0x94:
-            SUB_A_H();
-            break;
-
-        case 0x95:
-            SUB_A_L();
-            break;
-
-        case 0x96:
-            SUB_A_AHL();
-            break;
-        
-        case 0x97:
-            SUB_A_A();
-            break;
-
-        case 0x98:
-            SBC_A_B();
-            break;
-
-        case 0x99:
-            SBC_A_C();
-            break;
-
-        case 0x9A:
-            SBC_A_D();
-            break;
-
-        case 0x9B:
-            SBC_A_E();
-            break;
-
-        case 0x9C:
-            SBC_A_H();
-            break;
-
-        case 0x9D:
-            SBC_A_L();
-            break;
-
-        case 0x9E:
-            SBC_A_AHL();
-            break;
-
-        case 0x9F:
-            SBC_A_A();
-            break;
-
-        /* --- 0xA+ --- */
-        case 0xA0:
-            AND_A_B();
-            break;
-
-        case 0xA1:
-            AND_A_C();
-            break;
-
-        case 0xA2:
-            AND_A_D();
-            break;
-
-        case 0xA3:
-            AND_A_E();
-            break;
-
-        case 0xA4:
-            AND_A_H();
-            break;
-
-        case 0xA5:
-            AND_A_L();
-            break;
-
-        case 0xA6:
-            AND_A_AHL();
-            break;
-        
-        case 0xA7:
-            AND_A_A();
-            break;
-
-        case 0xA8:
-            XOR_A_B();
-            break;
-
-        case 0xA9:
-            XOR_A_C();
-            break;
-
-        case 0xAA:
-            XOR_A_D();
-            break;
-
-        case 0xAB:
-            XOR_A_E();
-            break;
-
-        case 0xAC:
-            XOR_A_H();
-            break;
-
-        case 0xAD:
-            XOR_A_L();
-            break;
-
-        case 0xAE:
-            XOR_A_AHL();
-            break;
-
-        case 0xAF:
-            XOR_A_A();
-            break;
-
-        /* --- 0xB+ --- */
-        case 0xB0:
-            OR_A_B();
-            break;
-
-        case 0xB1:
-            OR_A_C();
-            break;
-
-        case 0xB2:
-            OR_A_D();
-            break;
-
-        case 0xB3:
-            OR_A_E();
-            break;
-
-        case 0xB4:
-            OR_A_H();
-            break;
-
-        case 0xB5:
-            OR_A_L();
-            break;
-
-        case 0xB6:
-            OR_A_AHL();
-            break;
-
-        case 0xB7:
-            OR_A_A();
-            break;
-
-        case 0xB8:
-            CP_A_B();
-            break;
-
-        case 0xB9:
-            CP_A_C();
-            break;
-
-        case 0xBA:
-            CP_A_D();
-            break;
-
-        case 0xBB:
-            CP_A_E();
-            break;
-
-        case 0xBC:
-            CP_A_H();
-            break;
-
-        case 0xBD:
-            CP_A_L();
-            break;
-
-        case 0xBE:
-            CP_A_AHL();
-            break;
-
-        case 0xBF:
-            CP_A_A();
-            break;
-
-        /* --- 0xC+ --- */
-        case 0xC0:
-            RET_NZ();
-            break;
-
-        case 0xC1:
-            POP_BC();
-            break;
-
-        case 0xC2:
-            JP_NZ();
-            break;
-
-        case 0xC3:
-            JP();
-            break;
-
-        case 0xC4:
-            CALL_NZ();
-            break;
-
-        case 0xC5:
-            PUSH_BC();
-            break;
-
-        case 0xC6:
-            ADD_A_N();
-            break;
-
-        case 0xC7:
-            RST_0();
-            break;
-
-        case 0xC8:
-            RET_Z();
-            break;
-
-        case 0xC9:
-            RET();
-            break;
-
-        case 0xCA:
-            JP_Z();
-            break;
-
-        case 0xCB:
-            // Go into CB prefixed table
-            ;
-            uint8_t opcode_second = mem_read_byte(pc++);
-
-            #if OPCODE_DEBUG
-                printf("OP: CB%X\r\n", opcode_second);
-            #endif
-
-            switch (opcode_second) {
-                /* --- 0x0+ --- */
-
-                case 0x00:
-                    RLC_B();
-                    break;
-
-                /* --- 0x1+ --- */
-
-                case 0x11:
-                    RL_C();
-                    break;
-
-                /* --- 0x2+ --- */
-
-                /* --- 0x3+ --- */
-
-                case 0x37:
-                    SWAP_A();
-                    break;
-
-                /* --- 0x4+ --- */
-
-                /* --- 0x5+ --- */
-
-                /* --- 0x6+ --- */
-
-                /* --- 0x7+ --- */
-
-                case 0x7C:
-                    BIT_7_H();
-                    break;
-
-                /* --- 0x8+ --- */
-
-                case 0x87:
-                    RES_0_A();
-                    break;
-
-                /* --- 0x9+ --- */
-
-                /* --- 0xA+ --- */
-
-                /* --- 0xB+ --- */
-
-                /* --- 0xC+ --- */
-                case 0xCF:
-                    SET_1_A();
-                    break;
-                
-                /* --- 0xD+ --- */
-
-                /* --- 0xE+ --- */
-
-                /* --- 0xF+ --- */
-
-                default:
-                    // Instruction not implemeneted yet
-                    printf("Instruction with opcode CB%X undefined\r\n", opcode_second);
-                    return TICK_FAIL;
-                    break;
-            }
-
-            break;
-
-        case 0xCC:
-            CALL_Z();
-            break;
-
-        case 0xCD:
-            CALL();
-            break;
-
-        case 0xCE:
-            ADC_A_N();
-            break;
-
-        case 0xCF:
-            RST_1();
-            break;
-
-        /* --- 0xD+ --- */
-
-        case 0xD0:
-            RET_NC();
-            break;
-
-        case 0xD1:
-            POP_DE();
-            break;
-
-        case 0xD2:
-            JP_NC();
-            break;
-
-        case 0xD3:
-            break;
-
-        case 0xD4:
-            CALL_NC();
-            break;
-
-        case 0xD5:
-            PUSH_DE();
-            break;
-
-        case 0xD6:
-            SUB_A_N();
-            break;
-
-        case 0xD7:
-            RST_2();
-            break;
-
-        case 0xD8:
-            RET_C();
-            break;
-
-        case 0xD9:
-            RETI();
-            break;
-
-        case 0xDA:
-            JP_C();
-            break;
-
-        case 0xDB:
-            break;
-
-        case 0xDC:
-            CALL_C();
-            break;
-
-        case 0xDD:
-            break;
-
-        case 0xDE:
-            SBC_A_N();
-            break;
-
-        case 0xDF:
-            RST_3();
-            break;
-
-        /* --- 0xE+ --- */
-        case 0xE0:
-            LD_AN_A();
-            break;
-
-        case 0xE1:
-            POP_HL();
-            break;
-
-        case 0xE2:
-            LD_AC_A();
-            break;
-
-        case 0xE3:
-        case 0xE4:
-            break;
-
-        case 0xE5:
-            PUSH_HL();
-            break;
-
-        case 0xE6:
-            AND_A_N();
-            break;
-
-        case 0xE7:
-            RST_4();
-            break;
-
-        case 0xE8:
-            ADD_SP_E();
-            break;
-
-        case 0xE9:
-            JP_HL();
-            break;
-
-        case 0xEA:
-            LD_ANN_A();
-            break;
-
-        case 0xEB:
-        case 0xEC:
-        case 0xED:
-            break;
-
-        case 0xEE:
-            XOR_A_N();
-            break;
-
-        case 0xEF:
-            RST_5();
-            break;
-
-        /* --- 0xF+ --- */
-        case 0xF0:
-            LD_A_AN();
-            break;
-
-        case 0xF1:
-            POP_AF();
-            break;
-
-        case 0xF2:
-            LD_A_AC();
-            break;
-
-        case 0xF3:
-            DI();
-
-        case 0xF4:
-            break;
-
-        case 0xF5:
-            PUSH_AF();
-            break;
-
-        case 0xF6:
-            OR_A_N();
-            break;
-
-        case 0xF7:
-            RST_6();
-            break;
-        
-        case 0xF8:
-            LDHL_SP_E();
-            break;
-
-        case 0xF9:
-            LD_SP_HL();
-            break;
-
-        case 0xFA:
-            LD_A_ANN();
-            break;
-
-        case 0xFB:
-            EI();
-            break;
-
-        case 0xFC:
-        case 0xFD:
-            break;
-
-        case 0xFE:
-            CP_A_N();
-            break;
-
-        case 0xFF:
-            RST_7();
-            break;
-        
-        default:
-            // Instruction not implemeneted yet
-            printf("Instruction with opcode %X undefined\r\n", opcode);
-            return TICK_FAIL;
-            break;
+/**
+ * Disable interrupts
+ * 
+ * 1 machine cycle
+ */
+static uint8_t di(gb_t *gb, uint8_t opcode) {
+    gb->interrupts_enabled = 0;
+
+    return 1;
+}
+
+/**
+ * Enabled interrupts
+ *
+ * 1 machine cycle
+ */
+static uint8_t ei(gb_t *gb, uint8_t opcode) {
+    gb->interrupts_enabled = 1;
+
+    return 1;
+}
+
+// Jump instructions
+
+/**
+ * Jump to address of immediate 16
+ * 
+ * 4 machine cycles
+ */
+static uint8_t jp_nn(gb_t *gb, uint8_t opcode) {
+    gb->cpu.pc = cpu_read_nn(gb);
+
+    return 4;
+}
+
+/**
+ * Jump to address hl
+ *
+ * 1 machine cycle
+ */
+static uint8_t jp_hl(gb_t *gb, uint8_t opcode) {
+    gb->cpu.pc = gb->cpu.hl;
+
+    return 1;
+}
+
+/**
+ * Jump to address of immediate 16 if cc is true
+ * 
+ * 4 / 3 machine cycles
+ */
+static uint8_t jpif_nn(gb_t *gb, uint8_t opcode) {
+    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+    uint16_t nn = cpu_read_nn(gb);
+
+    if (cc) {
+        gb->cpu.pc = nn;
     }
 
+    return cc ? 4 : 3;
+}
+
+/**
+ * Jump relative to pc by e
+ * 
+ * 3 machine cycles
+ */
+static uint8_t jr(gb_t *gb, uint8_t opcode) {
+    int8_t e = cpu_read_e(gb);
+    gb->cpu.pc += e;
+
+    return 3;
+}
+
+/**
+ * Jump relative to pc by e if cc is true
+ * 
+ * 3 / 2 machine cycles
+ */
+static uint8_t jrif(gb_t *gb, uint8_t opcode) {
+    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode) & 0b11);
+    int8_t e = cpu_read_e(gb);
+
+    if (cc) {
+        gb->cpu.pc += e;
+    }
+
+    return cc ? 3 : 2;
+}
+
+/**
+ * Call routine at nn
+ *
+ * 6 machine cycles
+ */
+static uint8_t call(gb_t *gb, uint8_t opcode) {
+    uint16_t nn = cpu_read_nn(gb);
+
+    gb->cpu.sp -= 2;
+    mem_write_word(gb, gb->cpu.sp, gb->cpu.pc);
+
+    gb->cpu.pc = nn;
+
+    return 6;
+}
+
+/**
+ * Call routine at nn if cc is true
+ * 
+ * 6 / 3 machine cycles
+ */
+static uint8_t callif(gb_t *gb, uint8_t opcode) {
+    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+    uint16_t nn = cpu_read_nn(gb);
+
+    if (cc) {
+        gb->cpu.sp -= 2;
+        mem_write_word(gb, gb->cpu.sp, gb->cpu.pc);
+
+        gb->cpu.pc = nn;
+    }
+
+    return cc ? 6 : 3;
+}
+
+/**
+ * Return from routine
+ * 
+ * 4 machine cycles
+ */
+static uint8_t ret(gb_t *gb, uint8_t opcode) {
+    gb->cpu.pc = mem_read_word(gb, gb->cpu.sp);
+    gb->cpu.sp += 2;
+
+    return 4;
+}
+
+/**
+ * Return from routine if cc is true
+ * 
+ * 5 / 2 machine cycles
+ */
+static uint8_t retif(gb_t *gb, uint8_t opcode) {
+    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+
+    if (cc) {
+        gb->cpu.pc = mem_read_word(gb, gb->cpu.sp);
+        gb->cpu.sp += 2;
+    }
+
+    return cc ? 5 : 2;
+}
+
+/**
+ * Return from interrupt
+ * 
+ * 4 machine cycles
+ */
+static uint8_t reti(gb_t *gb, uint8_t opcode) {
+    gb->cpu.pc = mem_read_word(gb, gb->cpu.sp);
+    gb->cpu.sp += 2;
+
+    gb->interrupts_enabled = 1;
+
+    return 4;
+}
+
+/**
+ * Reset to position specified by n
+ * 
+ * 4 machine cycles
+ */
+static uint8_t rst(gb_t *gb, uint8_t opcode) {
+    uint8_t n = OPCODE_PARAM_HIGH(opcode);
+
+    gb->cpu.sp -= 2;
+    mem_write_word(gb, gb->cpu.sp, gb->cpu.pc);
+
+    gb->cpu.pc = ((n & 0b110) << 3) | ((n & 1) << 3);
+
+    return 4;
+}
+
+/**
+ * CB mapping function
+ */
+static uint8_t cb_map(gb_t *gb, uint8_t opcode) {
+    uint8_t new_opcode = cpu_read_program(gb);
+
+    #if OPCODE_DEBUG
+        printf("CB table opcode 0xCB%X\r\n", new_opcode);
+    #endif
+    
+    switch (new_opcode >> 3) {
+        case 0:
+            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? rlc_mhl(gb, new_opcode) : rlc_r(gb, new_opcode);
+
+        case 1:
+            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? rrc_mhl(gb, new_opcode) : rrc_r(gb, new_opcode);
+
+        case 2:
+            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? rl_mhl(gb, new_opcode) : rl_r(gb, new_opcode);
+
+        case 3:
+            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? rr_mhl(gb, new_opcode) : rr_r(gb, new_opcode);
+
+        case 4:
+            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? sla_mhl(gb, new_opcode) : sla_r(gb, new_opcode);
+
+        case 5:
+            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? sra_mhl(gb, new_opcode) : sra_r(gb, new_opcode);
+
+        case 6:
+            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? swap_mhl(gb, new_opcode) : swap_r(gb, new_opcode);
+
+        case 7:
+            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? srl_mhl(gb, new_opcode) : srl_r(gb, new_opcode);
+
+        default:
+            switch (new_opcode >> 6) {
+                case 1:
+                    return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? bit_n_r(gb, new_opcode) : bit_n_mhl(gb, new_opcode);
+                
+                case 2:
+                    return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? res_n_r(gb, new_opcode) : res_n_mhl(gb, new_opcode);
+
+                default:
+                    return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? set_n_mhl(gb, new_opcode) : set_n_r(gb, new_opcode);
+            }
+    }
+}
+
+/**
+ * No opcode for this value. Crash the program
+ */
+static uint8_t no_opcode(gb_t *gb, uint8_t opcode) {
+    printf("Opcode undefined - illegal");
+    abort();
+}
+
+static cpu_instruction_t* const cpu_opcode_table[] = {
+/*          0x-0        0x-1        0x-2        0x-3        0x-4        0x-5        0x-6        0x-7        0x-8        0x-9        0x-A        0x-B        0x-C        0x-D        0x-E        0x-F */
+/* 0x0- */  nop,        ld_rr_nn,   ld_mbc_a,   inc_rr,     inc_r,      dec_r,      ld_r_n,     rlca,       ld_mnn_sp,  add_hl_rr,  ld_a_mbc,   dec_rr,     inc_r,      dec_r,      ld_r_n,     rrca,
+/* 0x1- */  stop,       ld_rr_nn,   ld_mde_a,   inc_rr,     inc_r,      dec_r,      ld_r_n,     rla,        jr,         add_hl_rr,  ld_a_mde,   dec_rr,     inc_r,      dec_r,      ld_r_n,     rra,
+/* 0x2- */  jrif,       ld_rr_nn,   ldi_mhl_a,  inc_rr,     inc_r,      dec_r,      ld_r_n,     daa,        jrif,       add_hl_rr,  ldi_a_mhl,  dec_rr,     inc_r,      dec_r,      ld_r_n,     cpl,
+/* 0x3- */  jrif,       ld_rr_nn,   ldd_mhl_a,  inc_rr,     inc_mhl,    dec_mhl,    ld_mhl_n,   scf,        jrif,       add_hl_rr,  ldd_a_mhl,  dec_rr,     inc_r,      dec_r,      ld_r_n,     ccf,
+/* 0x4- */  ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_mhl,   ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_mhl,   ld_r_r,
+/* 0x5- */  ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_mhl,   ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_mhl,   ld_r_r,
+/* 0x6- */  ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_mhl,   ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_mhl,   ld_r_r,
+/* 0x7- */  ld_mhl_r,   ld_mhl_r,   ld_mhl_r,   ld_mhl_r,   ld_mhl_r,   ld_mhl_r,   halt,       ld_mhl_r,   ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_r,     ld_r_mhl,   ld_r_r,
+/* 0x8- */  add_a_r,    add_a_r,    add_a_r,    add_a_r,    add_a_r,    add_a_r,    add_a_mhl,  add_a_r,    adc_a_r,    adc_a_r,    adc_a_r,    adc_a_r,    adc_a_r,    adc_a_r,    adc_a_mhl,  adc_a_r,
+/* 0x9- */  sub_a_r,    sub_a_r,    sub_a_r,    sub_a_r,    sub_a_r,    sub_a_r,    sub_a_mhl,  sub_a_r,    sbc_a_r,    sbc_a_r,    sbc_a_r,    sbc_a_r,    sbc_a_r,    sbc_a_r,    sbc_a_mhl,  sbc_a_r,
+/* 0xA- */  and_a_r,    and_a_r,    and_a_r,    and_a_r,    and_a_r,    and_a_r,    and_a_mhl,  and_a_r,    xor_a_r,    xor_a_r,    xor_a_r,    xor_a_r,    xor_a_r,    xor_a_r,    xor_a_mhl,  xor_a_r,
+/* 0xB- */  or_a_r,     or_a_r,     or_a_r,     or_a_r,     or_a_r,     or_a_r,     or_a_mhl,   or_a_r,     cp_a_r,     cp_a_r,     cp_a_r,     cp_a_r,     cp_a_r,     cp_a_r,     cp_a_mhl,   cp_a_r,
+/* 0xC- */  retif,      pop_rr,     jpif_nn,    jp_nn,      callif,     push_rr,    add_a_n,    rst,        retif,      ret,        jpif_nn,    cb_map,     callif,     call,       adc_a_n,    rst,
+/* 0xD- */  retif,      pop_rr,     jpif_nn,    no_opcode,  callif,     push_rr,    sub_a_n,    rst,        retif,      reti,       jpif_nn,    no_opcode,  callif,     no_opcode,  sbc_a_n,    rst,
+/* 0xE- */  ldh_mn_a,   pop_rr,     ldh_mc_a,   no_opcode,  no_opcode,  push_rr,    and_a_n,    rst,        add_sp_e,   jp_hl,      ld_mnn_a,   no_opcode,  no_opcode,  no_opcode,  xor_a_n,    rst,
+/* 0xF- */  ldh_a_mn,   pop_rr,     ldh_a_mc,   di,         no_opcode,  push_rr,    or_a_n,     rst,        ld_hl_spe,  ld_sp_hl,   ld_a_mnn,   ei,         no_opcode,  no_opcode,  cp_a_n,     rst,
+};
+
+/* END INSTRUCTIONS REFACTOR */
+
+/**
+ * Initialise the CPU by setting the registers to 0
+ * and the SP to 0xFFFE
+ */
+void cpu_init(gb_t *gb) {
+    gb->cpu.a = 0;
+    gb->cpu.b = 0;
+    gb->cpu.c = 0;
+    gb->cpu.d = 0;
+    gb->cpu.e = 0;
+    gb->cpu.f = 0;
+    gb->cpu.l = 0;
+    gb->cpu.h = 0;
+
+    gb->cpu.sp = 0xFFFE;
+    gb->cpu.pc = 0x0;
+
+    gb->cpu.remaining_machine_cycles = 0;
+}
+
+/**
+ * Read, decode, execute loop
+ */
+int cpu_tick(gb_t *gb) {
+    if (gb->cpu.remaining_machine_cycles == 0) {
+        // Ready for next instruction
+        // Otherwise, theoretically doing a previous instruction, so wait
+        
+        // Opcode
+        uint8_t opcode = cpu_read_program(gb);
+
+        #if OPCODE_DEBUG
+            printf("OP: %X pc: %X\r\n", opcode, gb->cpu.pc - 1);
+        #endif
+
+        gb->cpu.remaining_machine_cycles = cpu_opcode_table[opcode](gb, opcode);
+    }
+
+    gb->cpu.remaining_machine_cycles--;
+
     // OK
-    return TICK_PASS;
-}
-
-uint16_t get_program_counter() {
-    return pc;
-}
-
-uint32_t get_ticks() {
-    return cpu_cycles;
+    return CPU_TICK_PASS;
 }

@@ -4,15 +4,17 @@
 #include <gb_memory.h>
 
 int main(int argc, char *argv[]) {
-    cpu_init();
-    mem_init();
+    gb_t *gb = get_gb_instance();
+
+    cpu_init(gb);
+    mem_init(gb);
 
     printf("GBEMU begin\r\n");
 
-    mem_load_rom("roms/pokemon blue.gb");
+    mem_load_rom(gb, "roms/pokemon blue.gb");
 
     // Main tick loop
-    while (cpu_tick() != TICK_FAIL) {
+    while (cpu_tick(gb) != CPU_TICK_ERROR) {
         gpu_update();
     }
 
@@ -30,5 +32,6 @@ int main(int argc, char *argv[]) {
     // gluOrtho2D( 0.0, 500.0, 500.0,0.0 );
     // glutDisplayFunc(display);
     // glutMainLoop();
-    // return 0;
+    
+    return 0;
 }

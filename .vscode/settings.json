@@ -10,6 +10,7 @@
         "memory.h": "c",
         "stdint.h": "c",
         "cpu.h": "c",
-        "stdlib.h": "c"
+        "stdlib.h": "c",
+        "limits": "cpp"
     }
 }

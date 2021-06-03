@@ -1,8 +1,8 @@
 #ifndef CPU_H
 #define CPU_H
 
-#define TICK_PASS 0
-#define TICK_FAIL 1
+#define CPU_TICK_PASS 0
+#define CPU_TICK_ERROR 1
 
 #include <stdio.h>
 #include <stdint.h>
@@ -12,23 +12,14 @@
 #include <gb.h>
 
 /**
- * Initialise the cpu
+ * Initialise the CPU by setting the registers to 0
+ * and the SP to 0xFFFE
  */
-void cpu_init();
+void cpu_init(gb_t *gb);
 
 /**
  * Read, decode, execute loop
  */
-int cpu_tick();
-
-/**
- * Return the program counter
- */
-uint16_t get_program_counter();
-
-/**
- * Return the number of t-cycles
- */
-uint32_t get_ticks();
+int cpu_tick(gb_t *gb);
 
 #endif

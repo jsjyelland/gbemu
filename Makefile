@@ -1,6 +1,6 @@
 CC = gcc
 
-CFLAGS = -Iinclude -W 
+CFLAGS = -Iinclude -W
 
 SRC = $(wildcard src/*.c) $(wildcard lib/*.c)
 OBJ = $(SRC:.c=.o)
@@ -20,7 +20,7 @@ else
 endif
 
 $(BIN):
-	mkdir -p $@
+	mkdir $@
 
 %.o: %.c
 	$(CC) -o $@ -c $< $(CFLAGS)
