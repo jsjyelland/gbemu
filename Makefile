@@ -9,7 +9,7 @@ BIN = ./bin
 
 ifeq ($(OS), Windows_NT)
 	CFLAGS += -I "C:\Program Files\mingw-w64\x86_64-8.1.0-posix-seh-rt_v6-rev0\mingw64\x86_64-w64-mingw32\include"
-	LDFLAGS = -lopengl32 -lglew32 -lfreeglut -lglu32
+	LDFLAGS = -lopengl32 -lglew32 -lglfw3 -lglu32 -lgdi32
 	TARGET = $(BIN)/gbemu.exe
 else
 	UNAME_S := $(shell uname -s)

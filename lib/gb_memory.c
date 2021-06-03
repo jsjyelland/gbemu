@@ -81,7 +81,7 @@ static uint8_t mem_read_hram(gb_t *gb, uint16_t address) {
 
     if (address < 0xFEA0) {
         // OAM
-        return gb->oam[address & 0xFF];
+        return gb->oam[address - 0xFEA0];
     }
 
     if (address < 0xFF00) {
@@ -120,7 +120,7 @@ static mem_read_function_t* const mem_read_map[] = {
     mem_read_ram,       // CXXX
     mem_read_ram,       // DXXX
     mem_read_ram,       // EXXX
-    mem_read_hram,  // FXXX
+    mem_read_hram,      // FXXX
 };
 
 /* MEMORY WRITES */
@@ -179,6 +179,7 @@ static void mem_write_high_ram(gb_t *gb, uint16_t address, uint8_t value) {
 
         if (address == 0xFF50 && value) {
             // Disable in bios
+            printf("Bios done\n");
             mem_remove_bios(gb);
         }
 
@@ -195,14 +196,14 @@ static void mem_write_high_ram(gb_t *gb, uint16_t address, uint8_t value) {
 }
 
 static mem_write_function_t* const mem_write_map[] = {
-    mem_write_mbc_rom,       // 0XXX
-    mem_write_mbc_rom,       // 1XXX
-    mem_write_mbc_rom,       // 2XXX
-    mem_write_mbc_rom,       // 3XXX
-    mem_write_mbc_rom,       // 4XXX
-    mem_write_mbc_rom,       // 5XXX
-    mem_write_mbc_rom,       // 6XXX
-    mem_write_mbc_rom,       // 7XXX
+    mem_write_mbc_rom,   // 0XXX
+    mem_write_mbc_rom,   // 1XXX
+    mem_write_mbc_rom,   // 2XXX
+    mem_write_mbc_rom,   // 3XXX
+    mem_write_mbc_rom,   // 4XXX
+    mem_write_mbc_rom,   // 5XXX
+    mem_write_mbc_rom,   // 6XXX
+    mem_write_mbc_rom,   // 7XXX
 
     mem_write_vram,      // 8XXX
     mem_write_vram,      // 9XXX
@@ -217,12 +218,15 @@ static mem_write_function_t* const mem_write_map[] = {
 };
 
 void mem_init(gb_t *gb) {
-    get_gb_instance()->rom = malloc(ROM_SIZE);
-    get_gb_instance()->vram = malloc(VRAM_SIZE);
-    get_gb_instance()->mbc_ram = malloc(MBC_RAM_SIZE);
-    get_gb_instance()->ram = malloc(RAM_SIZE);
-    get_gb_instance()->io_registers = malloc(IO_REGISTER_SIZE);
-    get_gb_instance()->hram = malloc(HIGH_SPEED_RAM_SIZE);
+    gb->rom = malloc(ROM_SIZE);
+    gb->vram = malloc(VRAM_SIZE);
+    gb->mbc_ram = malloc(MBC_RAM_SIZE);
+    gb->ram = malloc(RAM_SIZE);
+    gb->io_registers = malloc(IO_REGISTER_SIZE);
+    gb->hram = malloc(HIGH_SPEED_RAM_SIZE);
+    gb->oam = malloc(OAM_SIZE);
+
+    // Temporary
 }
 
 void mem_load_rom(gb_t *gb, const char *fname) {

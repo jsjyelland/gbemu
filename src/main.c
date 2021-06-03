@@ -8,30 +8,22 @@ int main(int argc, char *argv[]) {
 
     cpu_init(gb);
     mem_init(gb);
+    gpu_init(gb);
 
     printf("GBEMU begin\r\n");
 
-    mem_load_rom(gb, "roms/pokemon blue.gb");
+    mem_load_rom(gb, "roms/tetris.gb");
 
     // Main tick loop
-    while (cpu_tick(gb) != CPU_TICK_ERROR) {
-        gpu_update();
+    for (;;) {
+        cpu_tick(gb);
+        if (!gpu_tick(gb)) {
+            break;
+        }
+
+        // Handle inputs. For now - all buttons not pressed
+        mem_write_byte(gb, REG_P1, 0xF);
     }
 
-    // glutInit(&argc, argv);
-    // glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);
-
-    // glutInitWindowPosition(80, 80);
-    // glutInitWindowSize(500,500);
-
-    // glutCreateWindow("A Simple OpenGL Program");
-
-    // glClear(GL_COLOR_BUFFER_BIT);
-    // glMatrixMode( GL_PROJECTION );
-    // glLoadIdentity();
-    // gluOrtho2D( 0.0, 500.0, 500.0,0.0 );
-    // glutDisplayFunc(display);
-    // glutMainLoop();
-    
     return 0;
 }

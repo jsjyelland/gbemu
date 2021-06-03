@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#define REG_P1 0xFF00
+#define REG_LCDC 0xFF40
+#define REG_SCY 0xFF42
+#define REG_SCX 0xFF43
+#define REG_BGP 0xFF47
+
 // CPU core registers
 typedef struct {
     union {
@@ -46,12 +52,13 @@ typedef struct {
     gb_cpu_core_t cpu;
     
     // Memory
-    uint8_t *io_registers;
+    
     uint8_t *rom;
     uint8_t *vram;
     uint8_t *mbc_ram;
     uint8_t *ram;
     uint8_t *oam;
+    uint8_t *io_registers;
     uint8_t *hram;
 } gb_t;
 

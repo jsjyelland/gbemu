@@ -1,6 +1,8 @@
 #ifndef GPU_H
 #define GPU_H
 
+#include <GLFW/glfw3.h>
+
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -8,8 +10,11 @@
 #include <gb.h>
 #include <cpu.h>
 
-void gpu_init();
+#define DISPLAY_WIDTH 160
+#define DISPLAY_HEIGHT 144
 
-void gpu_update();
+int gpu_init(gb_t *gb);
+
+int gpu_tick(gb_t *gb);
 
 #endif

@@ -1,7 +1,5 @@
 #include <cpu.h>
 
-#define OPCODE_DEBUG 0
-
 /* HELPER FUNCTIONS */
 
 #define REG_A_PARAM 0b111
@@ -88,7 +86,10 @@ static uint8_t cpu_read_program(gb_t *gb) {
  */
 uint8_t cpu_read_n(gb_t *gb) {
     #if OPCODE_DEBUG
-       printf("n: 0x%X\r\n", mem_read_byte(gb, gb->cpu.pc));
+        #if !OPCODE_BIOS_DEBUG
+            if (!gb->in_bios)
+        #endif
+       printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
     #endif
 
     return cpu_read_program(gb);
@@ -99,7 +100,10 @@ uint8_t cpu_read_n(gb_t *gb) {
  */
 int8_t cpu_read_e(gb_t *gb) {
     #if OPCODE_DEBUG
-        printf("e: 0x%X\r\n", mem_read_byte(gb, gb->cpu.pc));
+        #if !OPCODE_BIOS_DEBUG
+            if (!gb->in_bios)
+        #endif
+        printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
     #endif
 
     return (int8_t)cpu_read_program(gb);
@@ -110,7 +114,10 @@ int8_t cpu_read_e(gb_t *gb) {
  */
 uint16_t cpu_read_nn(gb_t *gb) {
     #if OPCODE_DEBUG
-        printf("nn: 0x%X\r\n", mem_read_word(gb, gb->cpu.pc));
+        #if !OPCODE_BIOS_DEBUG
+            if (!gb->in_bios)
+        #endif
+        printf("\t%X", mem_read_word(gb, gb->cpu.pc));
     #endif
     
     uint16_t arg = mem_read_word(gb, gb->cpu.pc);
@@ -1627,6 +1634,8 @@ static uint8_t nop(gb_t *gb, uint8_t opcode) {
  */
 static uint8_t halt(gb_t *gb, uint8_t opcode) {
     // TODO
+    _sleep(5000);
+    printf("HALT\n");
     return 1;
 }
 
@@ -1740,7 +1749,6 @@ static uint8_t call(gb_t *gb, uint8_t opcode) {
     mem_write_word(gb, gb->cpu.sp, gb->cpu.pc);
 
     gb->cpu.pc = nn;
-
     return 6;
 }
 
@@ -1828,7 +1836,10 @@ static uint8_t cb_map(gb_t *gb, uint8_t opcode) {
     uint8_t new_opcode = cpu_read_program(gb);
 
     #if OPCODE_DEBUG
-        printf("CB table opcode 0xCB%X\r\n", new_opcode);
+        #if !OPCODE_BIOS_DEBUG
+            if (!gb->in_bios)
+        #endif
+        printf("%X\t", new_opcode);
     #endif
     
     switch (new_opcode >> 3) {
@@ -1923,7 +1934,7 @@ void cpu_init(gb_t *gb) {
 /**
  * Read, decode, execute loop
  */
-int cpu_tick(gb_t *gb) {
+void cpu_tick(gb_t *gb) {
     if (gb->cpu.remaining_machine_cycles == 0) {
         // Ready for next instruction
         // Otherwise, theoretically doing a previous instruction, so wait
@@ -1932,14 +1943,21 @@ int cpu_tick(gb_t *gb) {
         uint8_t opcode = cpu_read_program(gb);
 
         #if OPCODE_DEBUG
-            printf("OP: %X pc: %X\r\n", opcode, gb->cpu.pc - 1);
+            #if !OPCODE_BIOS_DEBUG
+                if (!gb->in_bios)
+            #endif
+            printf("%04X\t%X", gb->cpu.pc - 1, opcode);
         #endif
 
         gb->cpu.remaining_machine_cycles = cpu_opcode_table[opcode](gb, opcode);
+
+        #if OPCODE_DEBUG
+            #if !OPCODE_BIOS_DEBUG
+                if (!gb->in_bios)
+            #endif
+            printf("\n");
+        #endif
     }
 
     gb->cpu.remaining_machine_cycles--;
-
-    // OK
-    return CPU_TICK_PASS;
 }
