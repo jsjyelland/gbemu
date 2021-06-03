@@ -11,6 +11,7 @@
         "stdint.h": "c",
         "cpu.h": "c",
         "stdlib.h": "c",
-        "limits": "cpp"
+        "limits": "cpp",
+        "joypad.h": "c"
     }
 }

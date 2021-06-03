@@ -1634,8 +1634,6 @@ static uint8_t nop(gb_t *gb, uint8_t opcode) {
  */
 static uint8_t halt(gb_t *gb, uint8_t opcode) {
     // TODO
-    _sleep(5000);
-    printf("HALT\n");
     return 1;
 }
 

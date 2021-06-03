@@ -9,6 +9,7 @@ int main(int argc, char *argv[]) {
     cpu_init(gb);
     mem_init(gb);
     gpu_init(gb);
+    joypad_init();
 
     printf("GBEMU begin\r\n");
 
@@ -17,12 +18,12 @@ int main(int argc, char *argv[]) {
     // Main tick loop
     for (;;) {
         cpu_tick(gb);
+
         if (!gpu_tick(gb)) {
             break;
         }
 
-        // Handle inputs. For now - all buttons not pressed
-        mem_write_byte(gb, REG_P1, 0xF);
+        joypad_update_io_registers(gb);
     }
 
     return 0;

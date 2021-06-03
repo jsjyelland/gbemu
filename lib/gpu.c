@@ -78,11 +78,10 @@ int gpu_init(gb_t *gb) {
         return 0;
     }
 
-    window = glfwCreateWindow(DISPLAY_WIDTH, DISPLAY_HEIGHT, "gbemu", NULL, NULL);
+    window = glfwCreateWindow(DISPLAY_WIDTH * DISPLAY_SCALE, DISPLAY_HEIGHT * DISPLAY_SCALE, "gbemu", NULL, NULL);
 
     if (!window) {
         printf("Failed to open window\n");
-        
         return 0;
     }
     
@@ -93,6 +92,9 @@ int gpu_init(gb_t *gb) {
     glClearColor(0.0, 0.0, 0.0, 0.0);
     glShadeModel(GL_FLAT);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    // Assign key callback. Probably shouldn't be in gpu functions.
+    glfwSetKeyCallback(window, key_pressed_callback);
 
     return 1;
 }
@@ -118,8 +120,11 @@ int gpu_tick(gb_t *gb) {
 
     if (display_refresh_counter >= 70000) {
         display_refresh_counter = 0;
+        int width, height;
 
-        // glRasterPos2d(0, 0);
+        glfwGetWindowSize(window, &width, &height);
+
+        glPixelZoom((GLfloat)width / (GLfloat)DISPLAY_WIDTH, (GLfloat)height / (GLfloat)DISPLAY_HEIGHT);
 
         for (uint8_t i_x = 0; i_x < DISPLAY_WIDTH / 8; i_x++) {
             for (uint8_t i_y = 0; i_y < DISPLAY_HEIGHT / 8; i_y++) {
@@ -136,6 +141,8 @@ int gpu_tick(gb_t *gb) {
                 }
             }
         }
+
+        
 
         glDrawPixels(DISPLAY_WIDTH, DISPLAY_HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, pixelData);
         
