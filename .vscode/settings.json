@@ -12,6 +12,7 @@
         "cpu.h": "c",
         "stdlib.h": "c",
         "limits": "cpp",
-        "joypad.h": "c"
+        "joypad.h": "c",
+        "type_traits": "c"
     }
 }

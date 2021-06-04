@@ -5,10 +5,25 @@
 #include <stdlib.h>
 
 #define REG_P1 0xFF00
+
 #define REG_LCDC 0xFF40
+#define LCDC_BG_WINDOW_DISPLAY (1)
+#define LCDC_BG_TILE_MAP_DISPLAY_SELECT (1 << 3)
+#define LCDC_BG_TILE_DATA_SELECT (1 << 4)
+#define LCDC_LCD_CONTROL (1 << 7)
+
 #define REG_SCY 0xFF42
 #define REG_SCX 0xFF43
 #define REG_BGP 0xFF47
+
+#define INTERRUPT_ENABLE 0xFFFF
+#define INTERRUPT_FLAGS 0xFF0F
+
+#define INT_FLAG_VBLANK (1)
+#define INT_FLAG_LCD (1 << 1)
+#define INT_FLAG_TIMER (1 << 2)
+#define INT_FLAG_SERIAL (1 << 3)
+#define INT_FLAG_JOYPAD (1 << 4)
 
 // CPU core registers
 typedef struct {
@@ -46,13 +61,12 @@ typedef struct {
 // Struct for holding gameboy system variables
 typedef struct {
     uint8_t in_bios;
-    uint8_t interrupts_enabled;
+    uint8_t ime;
 
     // CPU
     gb_cpu_core_t cpu;
     
     // Memory
-    
     uint8_t *rom;
     uint8_t *vram;
     uint8_t *mbc_ram;

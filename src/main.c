@@ -13,7 +13,7 @@ int main(int argc, char *argv[]) {
 
     printf("GBEMU begin\r\n");
 
-    mem_load_rom(gb, "roms/tetris.gb");
+    mem_load_rom(gb, "roms/cpu_instrs.gb");
 
     // Main tick loop
     for (;;) {

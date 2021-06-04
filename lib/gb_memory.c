@@ -94,10 +94,6 @@ static uint8_t mem_read_hram(gb_t *gb, uint16_t address) {
         return gb->io_registers[address & 0xFF];
     }
 
-    if (address == 0xFFFF) {
-        // Interrupt enable register
-    }
-
     return gb->hram[address - 0xFF80];
 }
 
@@ -184,11 +180,6 @@ static void mem_write_high_ram(gb_t *gb, uint16_t address, uint8_t value) {
         }
 
         gb->io_registers[address & 0xFF] = value;
-        return;
-    }
-
-    if (address == 0xFFFF) {
-        // Interrupt enable register
         return;
     }
 

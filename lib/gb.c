@@ -7,7 +7,7 @@ gb_t* get_gb_instance() {
         gb_instance = malloc(sizeof(*gb_instance));
 
         gb_instance->in_bios = 1;
-        gb_instance->interrupts_enabled = 1;
+        gb_instance->ime = 1;
     }
     
     return gb_instance;

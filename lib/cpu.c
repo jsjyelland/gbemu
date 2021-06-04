@@ -89,7 +89,7 @@ uint8_t cpu_read_n(gb_t *gb) {
         #if !OPCODE_BIOS_DEBUG
             if (!gb->in_bios)
         #endif
-       printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
+        if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
     #endif
 
     return cpu_read_program(gb);
@@ -103,7 +103,7 @@ int8_t cpu_read_e(gb_t *gb) {
         #if !OPCODE_BIOS_DEBUG
             if (!gb->in_bios)
         #endif
-        printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
+        if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
     #endif
 
     return (int8_t)cpu_read_program(gb);
@@ -117,7 +117,7 @@ uint16_t cpu_read_nn(gb_t *gb) {
         #if !OPCODE_BIOS_DEBUG
             if (!gb->in_bios)
         #endif
-        printf("\t%X", mem_read_word(gb, gb->cpu.pc));
+        if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("\t%X", mem_read_word(gb, gb->cpu.pc));
     #endif
     
     uint16_t arg = mem_read_word(gb, gb->cpu.pc);
@@ -1651,7 +1651,7 @@ static uint8_t stop(gb_t *gb, uint8_t opcode) {
  * 1 machine cycle
  */
 static uint8_t di(gb_t *gb, uint8_t opcode) {
-    gb->interrupts_enabled = 0;
+    gb->ime = 0;
 
     return 1;
 }
@@ -1662,7 +1662,7 @@ static uint8_t di(gb_t *gb, uint8_t opcode) {
  * 1 machine cycle
  */
 static uint8_t ei(gb_t *gb, uint8_t opcode) {
-    gb->interrupts_enabled = 1;
+    gb->ime = 1;
 
     return 1;
 }
@@ -1806,7 +1806,7 @@ static uint8_t reti(gb_t *gb, uint8_t opcode) {
     gb->cpu.pc = mem_read_word(gb, gb->cpu.sp);
     gb->cpu.sp += 2;
 
-    gb->interrupts_enabled = 1;
+    gb->ime = 1;
 
     return 4;
 }
@@ -1837,44 +1837,44 @@ static uint8_t cb_map(gb_t *gb, uint8_t opcode) {
         #if !OPCODE_BIOS_DEBUG
             if (!gb->in_bios)
         #endif
-        printf("%X\t", new_opcode);
+        if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("%X\t", new_opcode);
     #endif
     
     switch (new_opcode >> 3) {
         case 0:
-            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? rlc_mhl(gb, new_opcode) : rlc_r(gb, new_opcode);
+            return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? rlc_mhl(gb, new_opcode) : rlc_r(gb, new_opcode);
 
         case 1:
-            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? rrc_mhl(gb, new_opcode) : rrc_r(gb, new_opcode);
+            return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? rrc_mhl(gb, new_opcode) : rrc_r(gb, new_opcode);
 
         case 2:
-            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? rl_mhl(gb, new_opcode) : rl_r(gb, new_opcode);
+            return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? rl_mhl(gb, new_opcode) : rl_r(gb, new_opcode);
 
         case 3:
-            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? rr_mhl(gb, new_opcode) : rr_r(gb, new_opcode);
+            return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? rr_mhl(gb, new_opcode) : rr_r(gb, new_opcode);
 
         case 4:
-            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? sla_mhl(gb, new_opcode) : sla_r(gb, new_opcode);
+            return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? sla_mhl(gb, new_opcode) : sla_r(gb, new_opcode);
 
         case 5:
-            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? sra_mhl(gb, new_opcode) : sra_r(gb, new_opcode);
+            return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? sra_mhl(gb, new_opcode) : sra_r(gb, new_opcode);
 
         case 6:
-            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? swap_mhl(gb, new_opcode) : swap_r(gb, new_opcode);
+            return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? swap_mhl(gb, new_opcode) : swap_r(gb, new_opcode);
 
         case 7:
-            return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? srl_mhl(gb, new_opcode) : srl_r(gb, new_opcode);
+            return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? srl_mhl(gb, new_opcode) : srl_r(gb, new_opcode);
 
         default:
             switch (new_opcode >> 6) {
                 case 1:
-                    return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? bit_n_r(gb, new_opcode) : bit_n_mhl(gb, new_opcode);
+                    return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? bit_n_mhl(gb, new_opcode) : bit_n_r(gb, new_opcode);
                 
                 case 2:
-                    return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? res_n_r(gb, new_opcode) : res_n_mhl(gb, new_opcode);
+                    return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? res_n_mhl(gb, new_opcode) : res_n_r(gb, new_opcode);
 
                 default:
-                    return ((new_opcode & 0xF) != 0xE) && ((new_opcode & 0xF) != 0x6) ? set_n_mhl(gb, new_opcode) : set_n_r(gb, new_opcode);
+                    return ((new_opcode & 0xF) == 0xE) || ((new_opcode & 0xF) == 0x6) ? set_n_mhl(gb, new_opcode) : set_n_r(gb, new_opcode);
             }
     }
 }
@@ -1907,7 +1907,26 @@ static cpu_instruction_t* const cpu_opcode_table[] = {
 /* 0xF- */  ldh_a_mn,   pop_rr,     ldh_a_mc,   di,         no_opcode,  push_rr,    or_a_n,     rst,        ld_hl_spe,  ld_sp_hl,   ld_a_mnn,   ei,         no_opcode,  no_opcode,  cp_a_n,     rst,
 };
 
-/* END INSTRUCTIONS REFACTOR */
+#define INTERRUPT_VBLANK 0x0040
+#define INTERRUPT_LCD_STATUS 0x0048
+#define INTERRUPT_TIMER 0x0050
+#define INTERRUPT_SERIAL 0x0058
+#define INTERRUPT_JOYPAD 0x0060
+
+/**
+ * Call an interrupt
+ */
+uint8_t call_interrupt(gb_t *gb, uint16_t addr) {
+    gb->ime = 0;
+
+    gb->cpu.sp -= 2;
+    mem_write_word(gb, gb->cpu.sp, gb->cpu.pc);
+
+    gb->cpu.pc = addr;
+
+    // 3 machine cycles
+    return 3;
+}
 
 /**
  * Initialise the CPU by setting the registers to 0
@@ -1927,6 +1946,8 @@ void cpu_init(gb_t *gb) {
     gb->cpu.pc = 0x0;
 
     gb->cpu.remaining_machine_cycles = 0;
+
+    gb->ime = 1;
 }
 
 /**
@@ -1944,17 +1965,54 @@ void cpu_tick(gb_t *gb) {
             #if !OPCODE_BIOS_DEBUG
                 if (!gb->in_bios)
             #endif
-            printf("%04X\t%X", gb->cpu.pc - 1, opcode);
+            if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("%04X\t%X", gb->cpu.pc - 1, opcode);
         #endif
 
-        gb->cpu.remaining_machine_cycles = cpu_opcode_table[opcode](gb, opcode);
+        gb->cpu.remaining_machine_cycles += cpu_opcode_table[opcode](gb, opcode);
 
         #if OPCODE_DEBUG
             #if !OPCODE_BIOS_DEBUG
                 if (!gb->in_bios)
             #endif
-            printf("\n");
+            if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("\n");
         #endif
+
+        // Check for interrupts
+        if (gb->ime) {
+            uint8_t interrupts_enabled = mem_read_byte(gb, INTERRUPT_ENABLE);
+            uint8_t interrupt_flags = mem_read_byte(gb, INTERRUPT_FLAGS);
+            uint8_t interrupts_fired_masked = interrupts_enabled & interrupt_flags;
+
+            if (interrupts_fired_masked & INT_FLAG_VBLANK) {
+                // Vblank
+                gb->cpu.remaining_machine_cycles += call_interrupt(gb, INTERRUPT_VBLANK);
+                mem_write_byte(gb, INTERRUPT_FLAGS, interrupt_flags & ~INT_FLAG_VBLANK);
+            }
+
+            if (interrupts_fired_masked & INT_FLAG_LCD) {
+                // LCD status
+                mem_write_byte(gb, INTERRUPT_FLAGS, interrupt_flags & ~INT_FLAG_LCD);
+                gb->cpu.remaining_machine_cycles += call_interrupt(gb, INTERRUPT_LCD_STATUS);
+            }
+
+            if (interrupts_fired_masked & INT_FLAG_TIMER) {
+                // Timer
+                mem_write_byte(gb, INTERRUPT_FLAGS, interrupt_flags & ~INT_FLAG_TIMER);
+                gb->cpu.remaining_machine_cycles += call_interrupt(gb, INTERRUPT_TIMER);
+            }
+
+            if (interrupts_fired_masked & INT_FLAG_SERIAL) {
+                // Serial
+                mem_write_byte(gb, INTERRUPT_FLAGS, interrupt_flags & ~INT_FLAG_SERIAL);
+                gb->cpu.remaining_machine_cycles += call_interrupt(gb, INTERRUPT_SERIAL);
+            }
+
+            if (interrupts_fired_masked & INT_FLAG_JOYPAD) {
+                // Joypad
+                mem_write_byte(gb, INTERRUPT_FLAGS, interrupt_flags & ~INT_FLAG_JOYPAD);
+                gb->cpu.remaining_machine_cycles += call_interrupt(gb, INTERRUPT_JOYPAD);
+            }
+        }
     }
 
     gb->cpu.remaining_machine_cycles--;
