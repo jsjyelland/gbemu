@@ -13,7 +13,7 @@ int main(int argc, char *argv[]) {
 
     printf("GBEMU begin\r\n");
 
-    mem_load_rom(gb, "roms/cpu_instrs.gb");
+    mem_load_rom(gb, "C:/Users/yella/Downloads/cpu_instrs/cpu_instrs/individual/11-op a,(hl).gb");
 
     // Main tick loop
     for (;;) {

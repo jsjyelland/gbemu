@@ -107,7 +107,7 @@ int gpu_tick(gb_t *gb) {
     gpu_counter++;
     display_refresh_counter++;
 
-    if (gpu_counter > 400) {
+    if (gpu_counter > 456) {
         gpu_counter = 0;
         gb->io_registers[0x44] = gb->io_registers[0x44] + 1;
 
@@ -120,7 +120,7 @@ int gpu_tick(gb_t *gb) {
         }
     }
 
-    if (display_refresh_counter >= 70000) {
+    if (display_refresh_counter >= 400000) {
         display_refresh_counter = 0;
         int width, height;
 
