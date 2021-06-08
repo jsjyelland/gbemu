@@ -549,13 +549,8 @@ static uint8_t ld_hl_spe(gb_t *gb, uint8_t opcode) {
 
     int8_t e = cpu_read_e(gb);
 
-    if (e >= 0) {
-        carry_check_add_word(gb, gb->cpu.sp, e);
-    } else {
-        carry_check_sub_word(gb, gb->cpu.sp, -e);
-    }
-
-    // Half carry behaviour unknown, won't bother implementing for now
+    carry_check_add(gb, (gb->cpu.sp & 0xFF), (e & 0xFF));
+    half_carry_check_add(gb, (gb->cpu.sp & 0xFF), (e & 0xFF));
 
     gb->cpu.hl = gb->cpu.sp + e;
 
@@ -577,6 +572,30 @@ static void add_helper(gb_t *gb, uint8_t n) {
 
     zero_check(gb, gb->cpu.a);
 }
+
+/**
+ * Helper function for adding n to a with carry
+ */
+static void adc_helper(gb_t *gb, uint8_t n) {
+    uint8_t a = gb->cpu.a;
+    uint8_t c = gb->cpu.flag_c;
+
+    gb->cpu.f = 0;
+
+    // Custom carry / half carry check
+    if ((uint16_t)a + (uint16_t)n + (uint16_t)c > 0xFF) {
+        gb->cpu.flag_c = 1;
+    }
+
+    if ((uint16_t)(a & 0xF) + (uint16_t)(n & 0xF) + (uint16_t)c > 0xF) {
+        gb->cpu.flag_h = 1;
+    }
+
+    gb->cpu.a = a + n + c;
+
+    zero_check(gb, gb->cpu.a);
+}
+
 
 /**
  * Add r to a and store in a
@@ -617,7 +636,7 @@ static uint8_t add_a_mhl(gb_t *gb, uint8_t opcode) {
  * 1 machine cycle
  */
 static uint8_t adc_a_r(gb_t *gb, uint8_t opcode) {
-    add_helper(gb, gb->cpu.flag_c + *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
+    adc_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
 
     return 1;
 }
@@ -628,7 +647,7 @@ static uint8_t adc_a_r(gb_t *gb, uint8_t opcode) {
  * 2 machine cycles
  */
 static uint8_t adc_a_n(gb_t *gb, uint8_t opcode) {
-    add_helper(gb, gb->cpu.flag_c + cpu_read_n(gb));
+    adc_helper(gb, cpu_read_n(gb));
 
     return 2;
 }
@@ -639,7 +658,7 @@ static uint8_t adc_a_n(gb_t *gb, uint8_t opcode) {
  * 2 machine cycles
  */
 static uint8_t adc_a_mhl(gb_t *gb, uint8_t opcode) {
-    add_helper(gb, gb->cpu.flag_c + mem_read_byte(gb, gb->cpu.hl));
+    adc_helper(gb, mem_read_byte(gb, gb->cpu.hl));
 
     return 2;
 }
@@ -693,12 +712,36 @@ static uint8_t sub_a_mhl(gb_t *gb, uint8_t opcode) {
 }
 
 /**
+ * Helper function for subtracting n from a with carry
+ */
+static void sbc_helper(gb_t *gb, uint8_t n) {
+    uint8_t a = gb->cpu.a;
+    uint8_t c = gb->cpu.flag_c;
+
+    gb->cpu.f = 0;
+    gb->cpu.flag_n = 1;
+
+    // Custom carry / half carry check
+    if (a < n + c) {
+        gb->cpu.flag_c = 1;
+    }
+
+    if ((a & 0xF) < (n & 0xF) + c) {
+        gb->cpu.flag_h = 1;
+    }
+
+    gb->cpu.a = a - n - c;
+
+    zero_check(gb, gb->cpu.a);
+}
+
+/**
  * Subtract with carry r from a and store in a
  * 
  * 1 machine cycle
  */
 static uint8_t sbc_a_r(gb_t *gb, uint8_t opcode) {
-    sub_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)) - gb->cpu.flag_c);
+    sbc_helper(gb, *cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode)));
 
     return 1;
 }
@@ -709,7 +752,7 @@ static uint8_t sbc_a_r(gb_t *gb, uint8_t opcode) {
  * 2 machine cycles
  */
 static uint8_t sbc_a_n(gb_t *gb, uint8_t opcode) {
-    sub_helper(gb, cpu_read_n(gb) - gb->cpu.flag_c);
+    sbc_helper(gb, cpu_read_n(gb));
 
     return 2;
 }
@@ -720,7 +763,7 @@ static uint8_t sbc_a_n(gb_t *gb, uint8_t opcode) {
  * 2 machine cycles
  */
 static uint8_t sbc_a_mhl(gb_t *gb, uint8_t opcode) {
-    sub_helper(gb, mem_read_byte(gb, gb->cpu.hl) - gb->cpu.flag_c);
+    sbc_helper(gb, mem_read_byte(gb, gb->cpu.hl));
 
     return 2;
 }
@@ -981,33 +1024,40 @@ static uint8_t dec_mhl(gb_t *gb, uint8_t opcode) {
  * 1 machine cycle
  */
 static uint8_t daa(gb_t *gb, uint8_t opcode) {
-    int16_t result = gb->cpu.a;
+    int16_t tmp = gb->cpu.a;
 
-    if (gb->cpu.flag_n) {
+    if (!gb->cpu.flag_n) {
+        if (gb->cpu.flag_h || (tmp & 0x0F) > 9) {
+            tmp += 6;
+        }
+            
+        if (gb->cpu.flag_c || tmp > 0x9F) {
+            tmp += 0x60;
+        }
+    } else {
         if (gb->cpu.flag_h) {
-            result = (result - 0x06) & 0xFF;
+            tmp -= 6;
+
+            if (!gb->cpu.flag_c) {
+                tmp &= 0xFF;
+            }
         }
 
         if (gb->cpu.flag_c) {
-            result -= 0x60;
-        }
-    }
-    else {
-        if ((gb->cpu.flag_h) || (result & 0x0F) > 0x09) {
-            result += 0x06;
-        }
-
-        if ((gb->cpu.flag_c) || result > 0x9F) {
-            result += 0x60;
+            tmp -= 0x60;
         }
     }
 
-    zero_check(gb, result & 0xFF);
-
-    gb->cpu.flag_c = (result & 0x100) == 0x100;
     gb->cpu.flag_h = 0;
+    gb->cpu.flag_z = 0;
 
-    gb->cpu.a = result;
+    if (tmp & 0x100) {
+        gb->cpu.flag_c = 1;
+    }
+    
+    gb->cpu.a = tmp & 0xFF;
+
+    zero_check(gb, gb->cpu.a);
 
     return 1;
 }
@@ -1128,13 +1178,8 @@ static uint8_t add_sp_e(gb_t *gb, uint8_t opcode) {
 
     int8_t e = cpu_read_e(gb);
 
-    if (e >= 0) {
-        carry_check_add_word(gb, gb->cpu.sp, e);
-    } else {
-        carry_check_sub_word(gb, gb->cpu.sp, -e);
-    }
-
-    // Half carry behaviour unknown, won't bother implementing for now
+    carry_check_add(gb, (gb->cpu.sp & 0xFF), (e & 0xFF));
+    half_carry_check_add(gb, (gb->cpu.sp & 0xFF), (e & 0xFF));
 
     gb->cpu.sp += e;
 
@@ -1491,8 +1536,12 @@ static uint8_t srl_mhl(gb_t *gb, uint8_t opcode) {
  * 2 machine cycles
  */
 static uint8_t swap_r(gb_t *gb, uint8_t opcode) {
+    gb->cpu.f = 0;
+
     uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
     *r = ((*r & 0xF) << 4) | ((*r & 0xF0) >> 4);
+
+    zero_check(gb, *r);
 
     return 2;
 }
@@ -1503,10 +1552,14 @@ static uint8_t swap_r(gb_t *gb, uint8_t opcode) {
  * 4 machine cycles
  */
 static uint8_t swap_mhl(gb_t *gb, uint8_t opcode) {
+    gb->cpu.f = 0;
+
     uint8_t r = mem_read_byte(gb, gb->cpu.hl);
     r = ((r & 0xF) << 4) | ((r & 0xF0) >> 4);
 
     mem_write_byte(gb, gb->cpu.hl, r);
+
+    zero_check(gb, r);
 
     return 4;
 }
@@ -1521,7 +1574,7 @@ static uint8_t bit_n_r(gb_t *gb, uint8_t opcode) {
     uint8_t *r = cpu_register_for_param(gb, OPCODE_PARAM_LOW(opcode));
     uint8_t b = OPCODE_PARAM_HIGH(opcode);
 
-    gb->cpu.f = 0;
+    gb->cpu.flag_n = 0;
     gb->cpu.flag_h = 1;
     gb->cpu.flag_z = !(*r & (1 << b));
 
@@ -1536,7 +1589,7 @@ static uint8_t bit_n_mhl(gb_t *gb, uint8_t opcode) {
     uint8_t r = mem_read_byte(gb, gb->cpu.hl);
     uint8_t b = OPCODE_PARAM_HIGH(opcode);
 
-    gb->cpu.f = 0;
+    gb->cpu.flag_n = 0;
     gb->cpu.flag_h = 1;
     gb->cpu.flag_z = !(r & (1 << b));
 
@@ -1607,6 +1660,8 @@ static uint8_t res_n_mhl(gb_t *gb, uint8_t opcode) {
  * 1 machine cycle
  */
 static uint8_t ccf(gb_t *gb, uint8_t opcode) {
+    gb->cpu.flag_n = 0;
+    gb->cpu.flag_h = 0;
     gb->cpu.flag_c ^= 1;
 
     return 1;
@@ -1618,6 +1673,8 @@ static uint8_t ccf(gb_t *gb, uint8_t opcode) {
  * 1 machine cycle
  */
 static uint8_t scf(gb_t *gb, uint8_t opcode) {
+    gb->cpu.flag_n = 0;
+    gb->cpu.flag_h = 0;
     gb->cpu.flag_c = 1;
 
     return 1;
@@ -1745,10 +1802,6 @@ static uint8_t jrif(gb_t *gb, uint8_t opcode) {
  */
 static uint8_t call(gb_t *gb, uint8_t opcode) {
     uint16_t nn = cpu_read_nn(gb);
-
-    if (nn == 0xC652) {
-        _sleep(5000);
-    }
 
     gb->cpu.sp -= 2;
     mem_write_word(gb, gb->cpu.sp, gb->cpu.pc);
