@@ -8,8 +8,6 @@
 #define IO_REGISTER_SIZE 0x80
 #define HIGH_SPEED_RAM_SIZE 0x80
 
-static FILE *fout;
-
 // BIOS code
 static const uint8_t bios[256] = {
     0x31, 0xFE, 0xFF, 0xAF, 0x21, 0xFF, 0x9F, 0x32, 0xCB, 0x7C, 0x20, 0xFB, 0x21, 0x26, 0xFF, 0x0E,
@@ -189,16 +187,9 @@ static void mem_write_high_ram(gb_t *gb, uint16_t address, uint8_t value) {
             mem_remove_bios(gb);
         }
 
-        if (address == 0xFF01) {
-            printf("%c", value);
-            fprintf(fout, "%c", value);
-        }
-
         gb->io_registers[address & 0xFF] = value;
         return;
-    }
-
-    
+    }    
 
     gb->hram[address - 0xFF80] = value;
 }
@@ -233,9 +224,6 @@ void mem_init(gb_t *gb) {
     gb->io_registers = malloc(IO_REGISTER_SIZE);
     gb->hram = malloc(HIGH_SPEED_RAM_SIZE);
     gb->oam = malloc(OAM_SIZE);
-
-    // Temporary
-    fout = fopen("out.txt", "w");
 }
 
 void mem_load_rom(gb_t *gb, const char *fname) {

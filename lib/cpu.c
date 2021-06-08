@@ -291,7 +291,7 @@ static uint8_t ld_a_mde(gb_t *gb, uint8_t opcode) {
  * 4 machine cycles
  */
 static uint8_t ld_a_mnn(gb_t *gb, uint8_t opcode) {
-    gb->cpu.a = cpu_read_nn(gb);
+    gb->cpu.a = mem_read_byte(gb, cpu_read_nn(gb));
 
     return 4;
 }
@@ -532,6 +532,9 @@ static uint8_t pop_rr(gb_t *gb, uint8_t opcode) {
 
     *r = mem_read_word(gb, gb->cpu.sp);
     gb->cpu.sp += 2;
+
+    // Make sure the first 4 bits of F are 0
+    gb->cpu.flag_blank = 0;
 
     return 3;
 }
@@ -1697,7 +1700,7 @@ static uint8_t jp_hl(gb_t *gb, uint8_t opcode) {
  * 4 / 3 machine cycles
  */
 static uint8_t jpif_nn(gb_t *gb, uint8_t opcode) {
-    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode) & 0b11);
     uint16_t nn = cpu_read_nn(gb);
 
     if (cc) {
@@ -1743,6 +1746,10 @@ static uint8_t jrif(gb_t *gb, uint8_t opcode) {
 static uint8_t call(gb_t *gb, uint8_t opcode) {
     uint16_t nn = cpu_read_nn(gb);
 
+    if (nn == 0xC652) {
+        _sleep(5000);
+    }
+
     gb->cpu.sp -= 2;
     mem_write_word(gb, gb->cpu.sp, gb->cpu.pc);
 
@@ -1756,7 +1763,7 @@ static uint8_t call(gb_t *gb, uint8_t opcode) {
  * 6 / 3 machine cycles
  */
 static uint8_t callif(gb_t *gb, uint8_t opcode) {
-    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode) & 0b11);
     uint16_t nn = cpu_read_nn(gb);
 
     if (cc) {
@@ -1787,7 +1794,7 @@ static uint8_t ret(gb_t *gb, uint8_t opcode) {
  * 5 / 2 machine cycles
  */
 static uint8_t retif(gb_t *gb, uint8_t opcode) {
-    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode));
+    uint8_t cc = cpu_cc_for_param(gb, OPCODE_PARAM_HIGH(opcode) & 0b11);
 
     if (cc) {
         gb->cpu.pc = mem_read_word(gb, gb->cpu.sp);
@@ -1957,6 +1964,14 @@ void cpu_tick(gb_t *gb) {
     if (gb->cpu.remaining_machine_cycles == 0) {
         // Ready for next instruction
         // Otherwise, theoretically doing a previous instruction, so wait
+
+        // if (gb->cpu.pc >= 0xC31A && gb->cpu.pc <= 0xC32A) {
+        //     _sleep(1000);
+        // }
+
+        // if (gb->cpu.pc == 0xC1B9) {
+        //     abort();
+        // }
         
         // Opcode
         uint8_t opcode = cpu_read_program(gb);
