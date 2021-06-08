@@ -8,8 +8,8 @@
 #include <gb_memory.h>
 #include <gb.h>
 
-#define OPCODE_DEBUG 0
-#define OPCODE_BIOS_DEBUG 0
+#define OPCODE_DEBUG 1
+#define OPCODE_BIOS_DEBUG 1
 
 /**
  * Initialise the CPU by setting the registers to 0

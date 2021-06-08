@@ -127,7 +127,7 @@ int gpu_tick(gb_t *gb) {
         glClear(GL_COLOR_BUFFER_BIT);
 
         if ((mem_read_byte(gb, REG_LCDC) & LCDC_LCD_CONTROL) && (mem_read_byte(gb, REG_LCDC) & LCDC_BG_WINDOW_DISPLAY)) {
-            glfwGetWindowSize(window, &width, &height);
+            glfwGetFramebufferSize(window, &width, &height);
 
             glPixelZoom((GLfloat)width / (GLfloat)DISPLAY_WIDTH, (GLfloat)height / (GLfloat)DISPLAY_HEIGHT);
             

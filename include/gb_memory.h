@@ -9,6 +9,8 @@
 #include <cpu.h>
 #include <gb.h>
 
+#define TEST_BIOS 1
+
 typedef uint8_t mem_read_function_t(gb_t *gb, uint16_t address);
 typedef void mem_write_function_t(gb_t *gb, uint16_t address, uint8_t value);
 

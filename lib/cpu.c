@@ -2013,6 +2013,18 @@ void cpu_tick(gb_t *gb) {
                 gb->cpu.remaining_machine_cycles += call_interrupt(gb, INTERRUPT_JOYPAD);
             }
         }
+
+        if (gb->cpu.pc > 0xFF && TEST_BIOS) {
+            printf("A: %02X\tF: %02X\n", gb->cpu.a, gb->cpu.f);
+            printf("B: %02X\tC: %02X\n", gb->cpu.b, gb->cpu.c);
+            printf("D: %02X\tE: %02X\n", gb->cpu.d, gb->cpu.e);
+            printf("H: %02X\tL: %02X\n", gb->cpu.h, gb->cpu.l);
+            printf("AF: %04X\tBC: %04X\tDE: %04X\tHL: %04X\n", gb->cpu.af, gb->cpu.bc, gb->cpu.de, gb->cpu.hl);
+            printf("SP: %04X\tPC: %04X\n", gb->cpu.sp, gb->cpu.pc);
+            printf("0xFF80: %02X, 0xFF81: %02X\n", mem_read_byte(gb, 0xFF80), mem_read_byte(gb, 0xFF81));
+            printf("Z: %i\tN: %i\tH: %i\tC: %i\n", gb->cpu.flag_z, gb->cpu.flag_n, gb->cpu.flag_h, gb->cpu.flag_c);
+            abort();
+        }
     }
 
     gb->cpu.remaining_machine_cycles--;

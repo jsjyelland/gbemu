@@ -5,6 +5,7 @@ CFLAGS = -Iinclude -W
 SRC = $(wildcard src/*.c) $(wildcard lib/*.c)
 OBJ = $(SRC:.c=.o)
 
+OBJDIR = ./build
 BIN = ./bin
 
 ifeq ($(OS), Windows_NT)
@@ -19,19 +20,22 @@ else
 	endif
 endif
 
+$(OBJDIR):
+	mkdir $@
+
 $(BIN):
 	mkdir $@
 
-%.o: %.c
+$(OBJDIR)/%.o: %.c
 	$(CC) -o $@ -c $< $(CFLAGS)
 
-all: | $(BIN) $(TARGET) 
+all: $(TARGET) 
 
-$(TARGET): $(OBJ)
+$(TARGET): $(OBJ) | $(BIN)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 clean:
 	rm -rf $(TARGET) $(OBJ) $(wildcard **/*.o) $(BIN)
 
-run:
+run: $(TARGET)
 	./$(TARGET)

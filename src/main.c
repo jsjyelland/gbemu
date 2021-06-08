@@ -8,12 +8,14 @@ int main(int argc, char *argv[]) {
 
     cpu_init(gb);
     mem_init(gb);
-    gpu_init(gb);
+    // gpu_init(gb);
     joypad_init();
 
     printf("GBEMU begin\r\n");
 
-    mem_load_rom(gb, "C:/Users/yella/Downloads/cpu_instrs/cpu_instrs/individual/11-op a,(hl).gb");
+    mem_load_rom(gb, "testroms/01-special.gb");
+
+    // mem_write_byte(gb, 0xFF80, 0x69);
 
     // Main tick loop
     for (;;) {

@@ -30,6 +30,10 @@ static const uint8_t bios[256] = {
     0xF5, 0x06, 0x19, 0x78, 0x86, 0x23, 0x05, 0x20, 0xFB, 0x86, 0x20, 0xFE, 0x3E, 0x01, 0xE0, 0x50
 };
 
+static const uint8_t test_bios[256] = {
+    0x18, 0x03, 0x04, 0x18, 0x05, 0x18, 0xFB
+};
+
 /* MEMORY READS */
 
 /**
@@ -38,7 +42,11 @@ static const uint8_t bios[256] = {
 static uint8_t mem_read_rom(gb_t *gb, uint16_t address) {
     // If in the bios, map addresses 0x00 to 0xFF to the bios instructions
     if (address < 0x100 && gb->in_bios) {
-        return bios[address];
+        #if TEST_BIOS
+            return test_bios[address];
+        #else
+            return bios[address];
+        #endif
     } else {
         return gb->rom[address];
     }
@@ -83,7 +91,7 @@ static uint8_t mem_read_hram(gb_t *gb, uint16_t address) {
 
     if (address < 0xFEA0) {
         // OAM
-        return gb->oam[address - 0xFEA0];
+        return gb->oam[address & 0xFF];
     }
 
     if (address < 0xFF00) {
