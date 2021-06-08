@@ -13,7 +13,7 @@ int main(int argc, char *argv[]) {
 
     printf("GBEMU begin\r\n");
 
-    mem_load_rom(gb, "roms/tetris.gb");
+    mem_load_rom(gb, "roms/dr mario.gb");
 
     uint8_t cycle_counter = 0;
 

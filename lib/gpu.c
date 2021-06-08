@@ -103,10 +103,10 @@ static uint32_t get_oam_entry(gb_t *gb, uint8_t index) {
     uint32_t ret_val;
 
     // Read the 4 bytes
-    ret_val = mem_read_byte(gb, (index * 4) + 0xFFE0);
-    ret_val |= mem_read_byte(gb, (index * 4) + 0xFFE1) << 1;
-    ret_val |= mem_read_byte(gb, (index * 4) + 0xFFE2) << 2;
-    ret_val |= mem_read_byte(gb, (index * 4) + 0xFFE3) << 3;
+    ret_val = mem_read_byte(gb, (index * 4) + 0xFE00);
+    ret_val |= mem_read_byte(gb, (index * 4) + 0xFE01) << 8;
+    ret_val |= mem_read_byte(gb, (index * 4) + 0xFE02) << 16;
+    ret_val |= mem_read_byte(gb, (index * 4) + 0xFE03) << 24;
 
     return ret_val;
 }
@@ -130,7 +130,7 @@ static uint8_t sprite_at_y(gb_t *gb, uint8_t index, uint8_t y) {
 
     int16_t sprite_y = SPRITE_YPOS(sprite_val);
 
-    uint8_t sprite_height = !!(mem_read_byte(gb, REG_LCDC) | LCDC_OBJ_BLOCK_COMPOSITION) ? 16 : 8;
+    uint8_t sprite_height = (mem_read_byte(gb, REG_LCDC) & LCDC_OBJ_BLOCK_COMPOSITION) ? 16 : 8;
 
     return (y >= sprite_y) && (y < (sprite_y + sprite_height));
 }
@@ -147,23 +147,23 @@ static uint8_t get_sprite_pixel(gb_t *gb, uint8_t index, uint8_t x, uint8_t y) {
     uint32_t sprite_val = get_oam_entry(gb, index);
 
     // Determine if 8x8 or 8x16 mode
-    uint8_t double_height_mode = !!(mem_read_byte(gb, REG_LCDC) | LCDC_OBJ_BLOCK_COMPOSITION);
+    uint8_t double_height_mode = !!(mem_read_byte(gb, REG_LCDC) & LCDC_OBJ_BLOCK_COMPOSITION);
 
     uint8_t x_in_sprite = x - SPRITE_XPOS(sprite_val);
 
-    if (SPRITE_ATTR(sprite_val) | SPRITE_ATTR_XFLIP) {
+    if (SPRITE_ATTR(sprite_val) & SPRITE_ATTR_XFLIP) {
         // Flip horizontally
         x_in_sprite = 7 - x_in_sprite;
     }
 
     uint8_t y_in_sprite = y - SPRITE_YPOS(sprite_val);
 
-    if (SPRITE_ATTR(sprite_val) | SPRITE_ATTR_YFLIP) {
+    if (SPRITE_ATTR(sprite_val) & SPRITE_ATTR_YFLIP) {
         // Flip vertically
         y_in_sprite = (double_height_mode ? 7 : 15) - y_in_sprite;
     }
 
-    uint16_t tile_address = 0x8000 + (SPRITE_TILENUM(sprite_val) & (double_height_mode ? 0xFE : 0xFF));
+    uint16_t tile_address = 0x8000 + ((SPRITE_TILENUM(sprite_val) & (double_height_mode ? 0xFE : 0xFF))) * 16;
 
     if (double_height_mode && y_in_sprite > 7) {
         // In second tile
@@ -172,7 +172,7 @@ static uint8_t get_sprite_pixel(gb_t *gb, uint8_t index, uint8_t x, uint8_t y) {
     }
 
     uint8_t col = get_tile_pixel(gb, tile_address, x_in_sprite, y_in_sprite);
-    col = obj_palette_transform(gb, col, !!(SPRITE_ATTR(sprite_val) | SPRITE_ATTR_PALETTE));
+    col = obj_palette_transform(gb, col, !!(SPRITE_ATTR(sprite_val) & SPRITE_ATTR_PALETTE));
 
     return col;
 }
@@ -237,7 +237,7 @@ static void calculate_pixel(gb_t *gb, uint8_t x, uint8_t y) {
                 // This sprite has a lower x position, and thus has
                 // priority
                 sprite_pixel = get_sprite_pixel(gb, index, x, y);
-                sprite_bg_priority = !!(SPRITE_ATTR(sprite_val) | SPRITE_ATTR_OBJ_BG_PRIORITY); 
+                sprite_bg_priority = !!(SPRITE_ATTR(sprite_val) & SPRITE_ATTR_OBJ_BG_PRIORITY); 
                 sprite_least_x = sprite_x;
             }
         }

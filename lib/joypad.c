@@ -65,6 +65,11 @@ void key_pressed_callback(GLFWwindow* window, int key, int scancode, int action,
             joypad.select = !action;
             break;
     }
+
+    gb_t *gb = get_gb_instance();
+
+    // Interrupt
+    mem_write_byte(gb, INTERRUPT_FLAGS, mem_read_byte(gb, INTERRUPT_FLAGS) | INT_FLAG_JOYPAD);
 }
 
 uint8_t get_joypad_mask(uint8_t port) {
@@ -74,15 +79,17 @@ uint8_t get_joypad_mask(uint8_t port) {
 void joypad_update_io_registers(gb_t *gb) {
     uint8_t port;
 
-    if (mem_read_byte(gb, REG_P1) & (1 << 4)) {
-        port = JOYPAD_PORT_P14;
+    uint8_t read_mask = mem_read_byte(gb, REG_P1);
+
+    if (read_mask & (1 << 5)) {
+        port = JOYPAD_PORT_P15;
     }
 
-    if (mem_read_byte(gb, REG_P1) & (1 << 5)) {
-        port = JOYPAD_PORT_P15;
+    if (read_mask & (1 << 4)) {
+        port = JOYPAD_PORT_P14;
     }
 
     uint8_t joypad_mask = get_joypad_mask(port);
 
-    mem_write_byte(gb, REG_P1, joypad_mask);
+    mem_write_byte(gb, REG_P1, read_mask | (joypad_mask & 0xF));
 }

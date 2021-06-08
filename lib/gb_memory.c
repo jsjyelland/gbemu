@@ -283,7 +283,9 @@ void mem_dma(gb_t *gb) {
             uint16_t read_addr = gb->dma_addr + gb->dma_cycles;
             uint16_t write_addr = 0xFE00 + gb->dma_cycles;
 
-            mem_write_byte(gb, write_addr, mem_read_byte(gb, read_addr));
+            uint8_t val = mem_read_byte(gb, read_addr);
+
+            mem_write_byte(gb, write_addr, val);
 
             gb->dma_cycles++;
 
