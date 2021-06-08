@@ -15,15 +15,25 @@ int main(int argc, char *argv[]) {
 
     mem_load_rom(gb, "roms/tetris.gb");
 
+    uint8_t cycle_counter = 0;
+
     // Main tick loop
     for (;;) {
-        cpu_tick(gb);
+        if (cycle_counter == 0) {
+            // Divide the cpu clock by 4
+            cpu_tick(gb);
+        }
+
+        mem_dma(gb);
 
         if (!gpu_tick(gb)) {
             break;
         }
 
         joypad_update_io_registers(gb);
+
+        cycle_counter++;
+        cycle_counter &= 3;
     }
 
     return 0;

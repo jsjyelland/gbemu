@@ -2017,14 +2017,6 @@ void cpu_tick(gb_t *gb) {
     if (gb->cpu.remaining_machine_cycles == 0) {
         // Ready for next instruction
         // Otherwise, theoretically doing a previous instruction, so wait
-
-        // if (gb->cpu.pc >= 0xC31A && gb->cpu.pc <= 0xC32A) {
-        //     _sleep(1000);
-        // }
-
-        // if (gb->cpu.pc == 0xC1B9) {
-        //     abort();
-        // }
         
         // Opcode
         uint8_t opcode = cpu_read_program(gb);
@@ -2033,16 +2025,17 @@ void cpu_tick(gb_t *gb) {
             #if !OPCODE_BIOS_DEBUG
                 if (!gb->in_bios)
             #endif
-            if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("%04X\t%X", gb->cpu.pc - 1, opcode);
+            printf("%04X\t%X", gb->cpu.pc - 1, opcode);
         #endif
 
+        // Execute
         gb->cpu.remaining_machine_cycles += cpu_opcode_table[opcode](gb, opcode);
 
         #if OPCODE_DEBUG
             #if !OPCODE_BIOS_DEBUG
                 if (!gb->in_bios)
             #endif
-            if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("\n");
+            printf("\n");
         #endif
 
         // Check for interrupts

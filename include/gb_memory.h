@@ -49,4 +49,9 @@ void mem_write_word(gb_t *gb, uint16_t address, uint16_t val);
  */
 void mem_load_rom(gb_t *gb, const char *fname);
 
+/**
+ * Compute dma
+ */
+void mem_dma(gb_t *gb);
+
 #endif

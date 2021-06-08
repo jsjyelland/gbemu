@@ -182,14 +182,19 @@ static void mem_write_high_ram(gb_t *gb, uint16_t address, uint8_t value) {
         // I/O registers
 
         if (address == 0xFF50 && value) {
-            // Disable in bios
-            printf("Bios done\n");
+            // Disable bios
             mem_remove_bios(gb);
+        }
+
+        if (address == REG_DMA) {
+            // Begin DMA
+            gb->dma_mode = DMA_MODE_REQUESTED;
+            gb->dma_addr = value << 8;
         }
 
         gb->io_registers[address & 0xFF] = value;
         return;
-    }    
+    }
 
     gb->hram[address - 0xFF80] = value;
 }
@@ -259,4 +264,37 @@ void mem_write_word(gb_t *gb, uint16_t address, uint16_t val) {
 
 void mem_remove_bios(gb_t *gb) {
     gb->in_bios = 0;
+}
+
+/**
+ * Compute dma
+ */
+void mem_dma(gb_t *gb) {
+    switch (gb->dma_mode) {
+        case DMA_MODE_REQUESTED:
+            gb->dma_cycles = 0;
+            gb->dma_mode = DMA_MODE_TRANSFER;
+
+            break;
+
+        case DMA_MODE_TRANSFER:
+            ;
+            // Transfer data
+            uint16_t read_addr = gb->dma_addr + gb->dma_cycles;
+            uint16_t write_addr = 0xFE00 + gb->dma_cycles;
+
+            mem_write_byte(gb, write_addr, mem_read_byte(gb, read_addr));
+
+            gb->dma_cycles++;
+
+            if (gb->dma_cycles == 160) {
+                // Done transfer
+                gb->dma_mode = DMA_MODE_NONE;
+            }
+
+            break;
+        
+        default:
+            break;
+    }
 }
