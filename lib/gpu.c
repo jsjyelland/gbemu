@@ -33,7 +33,7 @@ static uint8_t get_tile_map_index_scroll(gb_t *gb, uint8_t x, uint8_t y) {
  * to greyscale level (0-255)
  */
 static uint8_t grey_value(uint8_t pixel) {
-    return pixel * 255 / 3;
+    return 255 - (pixel * 85);
 }
 
 /**
@@ -42,7 +42,7 @@ static uint8_t grey_value(uint8_t pixel) {
 static uint8_t bg_palette_transform(gb_t *gb, uint8_t pixel) {
     uint8_t bgp = mem_read_byte(gb, REG_BGP);
 
-    return (0b11 << (2 * pixel)) & 0b11;
+    return (bgp & (0b11 << (2 * pixel))) >> (2 * pixel);
 }
 
 /**
@@ -64,7 +64,9 @@ static uint8_t get_tile_pixel(gb_t *gb, uint16_t tile_index, uint8_t x, uint8_t 
     uint8_t tile_lsb = mem_read_byte(gb, tile_address + (y * 2));
     uint8_t tile_msb = mem_read_byte(gb, tile_address + (y * 2) + 1);
 
-    return (!!(tile_msb & (1 << (7 - x))) << 1) | (!!(tile_lsb & (1 << (7 - x))));
+    uint8_t val = (!!(tile_msb & (1 << (7 - x))) << 1) | (!!(tile_lsb & (1 << (7 - x))));
+
+    return val;
 }
 
 /**
