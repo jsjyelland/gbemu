@@ -6,6 +6,19 @@
 
 #define REG_P1 0xFF00
 
+#define REG_DIV 0xFF04
+#define REG_TIMA 0xFF05
+#define REG_TMA 0xFF06
+#define REG_TMC 0xFF07
+
+#define TMC_ENABLE (1 << 2)
+#define TMC_CLOCK_SELECT 0b11
+
+#define TMC_CLOCK_DIV_1024 0b00
+#define TMC_CLOCK_DIV_16 0b01
+#define TMC_CLOCK_DIV_64 0b10
+#define TMC_CLOCK_DIV_256 0b11
+
 #define REG_LCDC 0xFF40
 
 #define LCDC_BG_WINDOW_DISPLAY (1)

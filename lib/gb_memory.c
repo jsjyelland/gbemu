@@ -180,6 +180,9 @@ static void mem_write_high_ram(gb_t *gb, uint16_t address, uint8_t value) {
 
     if (address < 0xFF80) {
         // I/O registers
+        if (address == REG_DIV) {
+            value = 0;
+        }
 
         if (address == 0xFF50 && value) {
             // Disable bios

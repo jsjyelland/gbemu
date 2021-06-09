@@ -32,6 +32,8 @@ void joypad_init() {
 }
 
 void key_pressed_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    uint8_t joypad_key_pressed = 1;
+
     switch (key) {
         case GLFW_KEY_UP:
             joypad.up = !action;
@@ -64,12 +66,17 @@ void key_pressed_callback(GLFWwindow* window, int key, int scancode, int action,
         case GLFW_KEY_RIGHT_SHIFT:
             joypad.select = !action;
             break;
+
+        default:
+            joypad_key_pressed = 0;
     }
 
-    gb_t *gb = get_gb_instance();
+    if (action && joypad_key_pressed) {
+        gb_t *gb = get_gb_instance();
 
-    // Interrupt
-    mem_write_byte(gb, INTERRUPT_FLAGS, mem_read_byte(gb, INTERRUPT_FLAGS) | INT_FLAG_JOYPAD);
+        // Interrupt
+        mem_write_byte(gb, INTERRUPT_FLAGS, mem_read_byte(gb, INTERRUPT_FLAGS) | INT_FLAG_JOYPAD);
+    }
 }
 
 void joypad_update_io_registers(gb_t *gb) {

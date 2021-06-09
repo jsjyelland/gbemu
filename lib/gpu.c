@@ -38,7 +38,12 @@ static uint8_t bg_palette_transform(gb_t *gb, uint8_t pixel) {
  * Transfrom a pixel through the obj palette
  */
 static uint8_t obj_palette_transform(gb_t *gb, uint8_t pixel, uint8_t obj_pallete) {
-    uint8_t obp = mem_read_byte(gb, obj_pallete ? REG_OBP0 : REG_OBP1);
+    // Colour 0 is transparent
+    if (pixel == 0) {
+        return 0;
+    }
+
+    uint8_t obp = mem_read_byte(gb, obj_pallete ? REG_OBP1 : REG_OBP0);
 
     return (obp & (0b11 << (2 * pixel))) >> (2 * pixel);
 }

@@ -13,6 +13,7 @@
         "stdlib.h": "c",
         "limits": "cpp",
         "joypad.h": "c",
-        "type_traits": "c"
+        "type_traits": "c",
+        "timer.h": "c"
     }
 }
