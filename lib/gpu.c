@@ -404,7 +404,7 @@ int gpu_tick(gb_t *gb) {
             // Calculate pixel
             calculate_pixel(gb, x_pos, y_pos);
 
-            if (x_pos < DISPLAY_WIDTH) {
+            if (x_pos < (DISPLAY_WIDTH - 1)) {
                 x_pos++;
             } else {
                 gpu_counter++;
