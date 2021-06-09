@@ -16,7 +16,7 @@ static struct {
     union {
         struct {
             uint8_t a:1;
-            uint8_t b;
+            uint8_t b:1;
             uint8_t select:1;
             uint8_t start:1;
         };
@@ -72,24 +72,19 @@ void key_pressed_callback(GLFWwindow* window, int key, int scancode, int action,
     mem_write_byte(gb, INTERRUPT_FLAGS, mem_read_byte(gb, INTERRUPT_FLAGS) | INT_FLAG_JOYPAD);
 }
 
-uint8_t get_joypad_mask(uint8_t port) {
-    return port == JOYPAD_PORT_P14 ? joypad.p14 : joypad.p15;
-}
-
 void joypad_update_io_registers(gb_t *gb) {
-    uint8_t port;
+    uint8_t joypad_mask;
 
     uint8_t read_mask = mem_read_byte(gb, REG_P1);
 
-    if (read_mask & (1 << 5)) {
-        port = JOYPAD_PORT_P15;
+    if (!(read_mask & (1 << 4))) {
+        joypad_mask = joypad.p14 & 0xF;
+    } else if (!(read_mask & (1 << 5))) {
+        joypad_mask = joypad.p15 & 0xF;
+    } else {
+        return;
     }
 
-    if (read_mask & (1 << 4)) {
-        port = JOYPAD_PORT_P14;
-    }
-
-    uint8_t joypad_mask = get_joypad_mask(port);
-
-    mem_write_byte(gb, REG_P1, read_mask | (joypad_mask & 0xF));
+    read_mask &= 0xF0;
+    mem_write_byte(gb, REG_P1, read_mask | joypad_mask);
 }
