@@ -15,7 +15,7 @@ int main() {
 
     printf("GBEMU begin\r\n");
 
-    mem_load_rom(gb, "roms/dr mario.gb");
+    mem_load_rom(gb, "roms/pokemon blue.gb");
 
     // Functions as a clock divider
     uint8_t cycle_counter = 0;

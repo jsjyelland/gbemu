@@ -1,6 +1,6 @@
 #include <gb_memory.h>
 
-#define ROM_SIZE 0x8000
+#define ROM_SIZE 0x4000
 #define VRAM_SIZE 0x2000
 #define MBC_RAM_SIZE 0x2000
 #define RAM_SIZE 0x2000
@@ -54,7 +54,7 @@ static uint8_t mem_read_rom(gb_t *gb, uint16_t address) {
  * Read from the switchable ROM bank on the cartridge
  */
 static uint8_t mem_read_mbc_rom(gb_t *gb, uint16_t address) {
-    return gb->rom[address];
+    return mbc_read_rom_bank(gb, address);
 }
 
 /**
@@ -68,7 +68,7 @@ static uint8_t mem_read_vram(gb_t *gb, uint16_t address) {
  * Read from the switchable RAM bank on the cartridge
  */
 static uint8_t mem_read_mbc_ram(gb_t *gb, uint16_t address) {
-    return gb->mbc_ram[address & 0x1FFF];
+    return mbc_read_ram_bank(gb, address);
 }
 
 /**
@@ -133,7 +133,7 @@ static mem_read_function_t* const mem_read_map[] = {
  * Write to the ROM bank on the cartridge
  */
 static void mem_write_mbc_rom(gb_t *gb, uint16_t address, uint8_t value) {
-    // TODO: Can't write here. this controls memory bank switching
+    mbc_write_rom_bank(gb, address, value);
 }
 
 /**
@@ -147,7 +147,7 @@ static void mem_write_vram(gb_t *gb, uint16_t address, uint8_t value) {
  * Write to the switchable RAM bank on the cartridge
  */
 static void mem_write_mbc_ram(gb_t *gb, uint16_t address, uint8_t value) {
-    gb->mbc_ram[address & 0x1FFF] = value;
+    mbc_write_ram_bank(gb, address, value);
 }
 
 /**
@@ -227,7 +227,6 @@ static mem_write_function_t* const mem_write_map[] = {
 void mem_init(gb_t *gb) {
     gb->rom = malloc(ROM_SIZE);
     gb->vram = malloc(VRAM_SIZE);
-    gb->mbc_ram = malloc(MBC_RAM_SIZE);
     gb->ram = malloc(RAM_SIZE);
     gb->io_registers = malloc(IO_REGISTER_SIZE);
     gb->hram = malloc(HIGH_SPEED_RAM_SIZE);
@@ -241,8 +240,11 @@ void mem_load_rom(gb_t *gb, const char *fname) {
     // Open file
     f = fopen(fname, "rb");
 
-    // Load 32768 bytes into the rom
+    // Load first 16KB into the rom
     fread(gb->rom, ROM_SIZE, 1, f);
+
+    // Setup the MBC
+    mbc_setup(gb, f);
 
     // Close
     fclose(f);

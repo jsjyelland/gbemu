@@ -8,6 +8,7 @@
 
 #include <cpu.h>
 #include <gb.h>
+#include <mbc.h>
 
 #define TEST_BIOS 0
 

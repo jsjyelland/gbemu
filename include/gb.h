@@ -107,11 +107,19 @@ typedef struct {
     // Memory
     uint8_t *rom;
     uint8_t *vram;
-    uint8_t *mbc_ram;
     uint8_t *ram;
     uint8_t *oam;
     uint8_t *io_registers;
     uint8_t *hram;
+
+    // MBC
+    uint8_t *mbc_rom;
+    uint8_t *mbc_ram;
+
+    uint8_t current_rom_bank;
+    uint8_t current_ram_bank;
+
+    uint8_t rom_ram_mode;
 
     // DMA
     uint8_t dma_mode;
