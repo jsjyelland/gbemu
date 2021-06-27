@@ -13,9 +13,7 @@ int main() {
     joypad_init();
     timer_init();
 
-    printf("GBEMU begin\r\n");
-
-    mem_load_rom(gb, "roms/pokemon blue.gb");
+    mem_load_rom(gb, "roms/super mario land.gb");
 
     // Functions as a clock divider
     uint8_t cycle_counter = 0;

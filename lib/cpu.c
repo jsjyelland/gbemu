@@ -89,7 +89,7 @@ uint8_t cpu_read_n(gb_t *gb) {
         #if !OPCODE_BIOS_DEBUG
             if (!gb->in_bios)
         #endif
-        if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
+        printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
     #endif
 
     return cpu_read_program(gb);
@@ -103,7 +103,7 @@ int8_t cpu_read_e(gb_t *gb) {
         #if !OPCODE_BIOS_DEBUG
             if (!gb->in_bios)
         #endif
-        if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
+        printf("\t%X", mem_read_byte(gb, gb->cpu.pc));
     #endif
 
     return (int8_t)cpu_read_program(gb);
@@ -117,7 +117,7 @@ uint16_t cpu_read_nn(gb_t *gb) {
         #if !OPCODE_BIOS_DEBUG
             if (!gb->in_bios)
         #endif
-        if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("\t%X", mem_read_word(gb, gb->cpu.pc));
+        printf("\t%X", mem_read_word(gb, gb->cpu.pc));
     #endif
     
     uint16_t arg = mem_read_word(gb, gb->cpu.pc);
@@ -1897,7 +1897,7 @@ static uint8_t cb_map(gb_t *gb, uint8_t opcode) {
         #if !OPCODE_BIOS_DEBUG
             if (!gb->in_bios)
         #endif
-        if (gb->cpu.pc < 0x02ED || gb->cpu.pc > 0x02F1) printf("%X\t", new_opcode);
+        printf("%X\t", new_opcode);
     #endif
     
     switch (new_opcode >> 3) {
@@ -2017,7 +2017,7 @@ void cpu_tick(gb_t *gb) {
     if (gb->cpu.remaining_machine_cycles == 0) {
         // Ready for next instruction
         // Otherwise, theoretically doing a previous instruction, so wait
-        
+
         // Opcode
         uint8_t opcode = cpu_read_program(gb);
 
