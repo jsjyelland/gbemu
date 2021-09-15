@@ -38,4 +38,4 @@ clean:
 	rm -rf $(TARGET) $(OBJ) $(wildcard **/*.o) $(BIN)
 
 run: $(TARGET)
-	./$(TARGET)
+	$(TARGET) $(args)

@@ -4,7 +4,12 @@
 #include <gb_memory.h>
 #include <timer.h>
 
-int main() {
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        printf("Usage: gbemu <filename>\n");
+        return 0;
+    }
+
     gb_t *gb = get_gb_instance();
 
     cpu_init(gb);
@@ -13,7 +18,7 @@ int main() {
     joypad_init();
     timer_init();
 
-    mem_load_rom(gb, "roms/super mario land.gb");
+    mem_load_rom(gb, argv[1]);
 
     // Functions as a clock divider
     uint8_t cycle_counter = 0;
